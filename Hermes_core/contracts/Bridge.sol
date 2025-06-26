@@ -7,7 +7,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/metatx/ERC2771Context.sol";
-import "@openzeppelin/contracts/utils/metatx/MinimalForwarder.sol";
 import "./Coin.sol";
 
 /**
@@ -134,7 +133,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Bridge: insufficient tokens");
 
         //burn ugdx from user
-        ugdxToken.burnFrom(sender, ugdxAmount);
+        ugdxToken.burn(ugdxAmount);
 
         //update tracking
         totalUGDXMinted -= ugdxAmount;

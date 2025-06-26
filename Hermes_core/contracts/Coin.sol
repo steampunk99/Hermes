@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.20;
 
  import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  import "@openzeppelin/contracts/utils/Pausable.sol";
  import "@openzeppelin/contracts/access/Ownable.sol";
-
+import "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 
 /**
  * @title UGDX TOKEN
@@ -19,16 +19,16 @@ pragma solidity ^0.8.28;
  */
 
 
-contract UGDX is ERC20, Ownable, Pausable {
+contract UGDX is ERC20, Ownable, Pausable,ERC2771Context  {
 
     //events for offchain tracking
     event TokensMinted(address indexed to, uint256 amount);
     event TokensBurned(address indexed from, uint256 amount);
 
-    constructor(address _initialOwner)
+    constructor(address _initialOwner, address trustedForwarder)
     ERC20("Uganda Shilling Token", "UGDX")
     Ownable(_initialOwner)
-   
+    ERC2771Context(trustedForwarder)
     {
         // Token starts with 0 supply - minted only when backed by real ugx
     }
@@ -57,12 +57,9 @@ contract UGDX is ERC20, Ownable, Pausable {
     }
 
 
-``````````````````````````````
         /**
      * @dev Burn tokens from caller's balance (used for MM withdrawals)
      * @param amount Amount of tokens to burn
-    
-     * 
      * Requirements:
      * - Contract must not be paused
      * - Caller must have sufficient balance
@@ -78,6 +75,7 @@ contract UGDX is ERC20, Ownable, Pausable {
         emit TokensBurned(msg.sender, amount);
     }
 
+ 
     /** 
      * @dev emergency pause function - stop all transfers, mints and burns
      * only owner can pause
@@ -125,4 +123,17 @@ contract UGDX is ERC20, Ownable, Pausable {
         return balanceOf(account) / 10**decimals();
     }
 
+    //  OVERRIDE FUNCTIONS for proper meta-transaction support
+    function _msgSender() internal view virtual override(Context, ERC2771Context) returns (address) {
+        return ERC2771Context._msgSender();
     }
+
+    function _msgData() internal view virtual override(Context, ERC2771Context) returns (bytes calldata) {
+        return ERC2771Context._msgData();
+    }
+
+    function _contextSuffixLength() internal view virtual override(Context, ERC2771Context) returns (uint256) {
+        return ERC2771Context._contextSuffixLength();
+    }
+
+}

@@ -1,5 +1,5 @@
 const { ethers } = require("hardhat");
-require("@openzeppelin/contracts/metatx/MinimalForwarder.sol");
+
 
 async function main() {
   const [deployer] = await ethers.getSigners();
@@ -7,10 +7,10 @@ async function main() {
   console.log("Deploying contracts with the account:", deployer.address);
 
   // 1. Deploy the Trusted Forwarder (MinimalForwarder)
-  const MinimalForwarder = await ethers.getContractFactory("MinimalForwarder");
-  const forwarder = await MinimalForwarder.deploy();
-  await forwarder.deployed();
-  console.log("MinimalForwarder deployed to:", forwarder.address);
+const ERC2771Forwarder = await ethers.getContractFactory("ERC2771Forwarder");
+const forwarder = await ERC2771Forwarder.deploy("Hermes Forwarder"); // Pass a name for EIP712
+await forwarder.deployed();
+console.log("ERC2771Forwarder deployed to:", forwarder.address);
 
   // 2. Deploy the UGDX Token
   // The owner will be the bridge contract, but we need to set it after deployment
