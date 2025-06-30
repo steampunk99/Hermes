@@ -1,0 +1,90 @@
+// Use MySQL provider for Prisma
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// User model: stores basic user info and KYC/verification status
+model User {
+  id           String   @id @default(uuid())           // Unique user ID (UUID)
+  phone        String   @unique                       // Phone number (unique)
+  email        String   @unique                       // Email address (unique)
+  passwordHash String                                // Hashed password
+  kycVerified  Boolean  @default(false)                // Whether KYC/basic verification is done (email/phone verified)
+  walletAddress String?                               // Linked crypto wallet address (if provided)
+  role         String   @default("user")               // Role: "user" (default) or "admin" (or "advanced")
+  gasCredit    Decimal  @default(0)                    // Gas credit (UGX/UGDX equivalent) user has for meta-tx
+  ugxCredit    Decimal  @default(0)                    // Off-chain UGX credit (if any, e.g., pending balance)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations:
+  transactions Transaction[]  // Transactions made by user
+  mmJobs       MobileMoneyJob[] // Mobile money jobs initiated by user
+  gasDrips     GasDrip[]      // Gas drip usage or top-up records for user
+}
+
+// Transaction model: records mint, redeem, and send transactions for history
+model Transaction {
+  id          Int       @id @default(autoincrement())
+  user        User      @relation(fields: [userId], references: [id])
+  userId      String
+  type        TransactionType                         // "MINT", "REDEEM", or "SEND"
+  amountUGX   Decimal                                 // Amount in UGX (or UGDX equivalent) involved
+  ugdxAmount  Decimal                                 // UGDX tokens amount (for mint/redeem, this is net tokens; for send, same as amount)
+  toAddress   String?                                 // For SEND: target blockchain address (if on-chain transfer)
+  toPhone     String?                                 // For SEND: target phone number (if sending to mobile money)
+  txHash      String?                                 // Transaction hash for on-chain operations (if available)
+  status      String   @default("PENDING")            // Status: "PENDING", "COMPLETED", "FAILED"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  mmJob       MobileMoneyJob? @relation(fields: [mmJobId], references: [id])
+  mmJobId     Int?            // Link to mobile money job (for mint or redeem operations)
+}
+
+// Enum for transaction types
+enum TransactionType {
+  MINT
+  REDEEM
+  SEND
+}
+
+// MobileMoneyJob model: tracks interactions with the MM provider for deposits/withdrawals
+model MobileMoneyJob {
+  id          Int      @id @default(autoincrement())
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  phone       String                                // Phone number for MM transaction
+  amount   Decimal                               // Amount in UGX to collect or disburse
+  type        MMJobType                             // "COLLECT" (deposit) or "DISBURSE" (withdrawal)
+  provider    String                                // Provider used ("MTN" or "AIRTEL")
+  trans_id String?                               // Reference ID from provider (e.g., transaction ID)
+  status      String   @default("PENDING")          // "PENDING", "SUCCESS", "FAIL"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // relation back to Transaction if needed
+  transaction Transaction?
+}
+
+// Enum for mobile money job type
+enum MMJobType {
+  COLLECT    // Collect money from user (deposit)
+  DISBURSE   // Disburse money to user (withdrawal)
+}
+
+// GasDrip model: logs gas credit allocations and usage per user (for meta-transactions)
+model GasDrip {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  amount    Decimal                             // Amount of gas credit given or used (in UGX equivalent or gas token)
+  type      String                              // "DRIP" for credit given, "USE" for usage
+  note      String?                             // Description or tx reference for context
+  createdAt DateTime @default(now())
+}
