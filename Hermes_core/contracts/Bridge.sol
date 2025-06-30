@@ -24,6 +24,10 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
     UGDX public immutable ugdxToken;
     IERC20 public immutable usdtToken;
 
+     IPriceOracle public priceOracle;
+    uint256 public maxPriceAgeForSwaps = 3600; // 1 hour max
+    bool public useOracleForPricing = false;
+
     //Exchange rate: how many ugx per 1 usd with 18d
     uint256 public ugxPerUSD = 3700 * 10**18;
 
@@ -49,6 +53,10 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         uint256 ugdxAmount,
         uint256 timestamp
     );
+
+     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event PricingModeChanged(bool useOracle);
+    event SwapRejectedStalePrice(address indexed user, uint256 priceAge);
 
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
     event SwapFeeUpdated(uint256 oldFee, uint256 newFee);
@@ -136,20 +144,19 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
      * 3. Backend matches tx hash to withdrawal request
      */
 
-    function burnForWithdrawal(uint256 ugdxAmount) external whenNotPaused nonReentrant {
-        require(ugdxAmount > 0, "Bridge: Amount must be > 0");
-        
-        address sender = _msgSender();
-        require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Bridge: insufficient tokens");
+   function burnForWithdrawal(uint256 ugdxAmount) external whenNotPaused nonReentrant {
+    require(ugdxAmount > 0, "Bridge: Amount must be > 0");
+    
+    address sender = _msgSender();
+    require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Bridge: insufficient tokens");
 
-        //burn ugdx from user
-        ugdxToken.burn(ugdxAmount);
+    // User burns their own tokens
+    ugdxToken.transferFrom(sender, address(this), ugdxAmount);
+    ugdxToken.burn(ugdxAmount); // Bridge burns the received tokens
 
-        //update tracking
-        totalUGDXMinted -= ugdxAmount;
-
-        emit UGDXBurnedForWithdrawal(sender, ugdxAmount,block.timestamp);
-    }
+    totalUGDXMinted -= ugdxAmount;
+    emit UGDXBurnedForWithdrawal(sender, ugdxAmount, block.timestamp);
+}
 
 /**
  * @dev Emergency withdraw tokens (circuit breaker)
