@@ -75,6 +75,33 @@ contract UGDX is ERC20, Ownable, Pausable,ERC2771Context  {
         emit TokensBurned(msg.sender, amount);
     }
 
+/**
+ * @dev Burn tokens from specified account (used by bridge for withdrawals)
+ * @param from Address to burn tokens from
+ * @param amount Amount of tokens to burn
+ * 
+ * Requirements:
+ * - Only owner (bridge) can call this
+ * - Account must have sufficient balance
+ * - Account must have approved the bridge to spend tokens
+ */
+function burnFrom(address from, uint256 amount) 
+    external 
+    onlyOwner 
+    whenNotPaused 
+{
+    require(amount > 0, "UGDX: Burn amount must be > 0");
+    require(balanceOf(from) >= amount, "UGDX: Insufficient balance");
+    require(allowance(from, msg.sender) >= amount, "UGDX: Insufficient allowance");
+    
+    // Reduce allowance first (prevents reentrancy)
+    _spendAllowance(from, msg.sender, amount);
+    
+    // Burn the tokens
+    _burn(from, amount);
+    
+    emit TokensBurned(from, amount);
+}
  
     /** 
      * @dev emergency pause function - stop all transfers, mints and burns

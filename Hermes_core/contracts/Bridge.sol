@@ -71,7 +71,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
      * @param trustedForwarder The address of the trusted forwarder for meta-transactions
      */
 
-    constructor(address _ugdxToken, address _usdtToken, address _initialOwner, address trustedForwarder,_priceOracle) 
+    constructor(address _ugdxToken, address _usdtToken, address _initialOwner, address trustedForwarder,address _priceOracle) 
     Ownable(_initialOwner)
     ERC2771Context(trustedForwarder) {
         require(_ugdxToken != address(0), "Bridge: Invalid ugdx address");
@@ -148,11 +148,8 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
     require(ugdxAmount > 0, "Bridge: Amount must be > 0");
     
     address sender = _msgSender();
-    require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Bridge: insufficient tokens");
-
-    // User burns their own tokens
-    ugdxToken.transferFrom(sender, address(this), ugdxAmount);
-    ugdxToken.burn(ugdxAmount); // Bridge burns the received tokens
+    require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Insufficient balance");
+    ugdxToken.burnFrom(sender, ugdxAmount); // Direct burn
 
     totalUGDXMinted -= ugdxAmount;
     emit UGDXBurnedForWithdrawal(sender, ugdxAmount, block.timestamp);
@@ -166,6 +163,10 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
  */
 function emergencyWithdraw(address token, uint256 amount, address to) external onlyOwner {
     require(to != address(0), "Bridge: Invalid recipient");
+     if (token == address(usdtToken)) {
+        uint256 maxWithdraw = totalUSDTReserves / 4; // Only 25% of user funds
+        require(amount <= maxWithdraw, "Cannot drain user reserves");
+    }
     IERC20(token).safeTransfer(to, amount);
     emit EmergencyWithdrawal(token, amount, to);
 }
@@ -191,23 +192,22 @@ function unpauseBridge() external onlyOwner {
      * @dev Get current exchange rate from oracle or fallback to manual
      * @return rate Current UGX per USD rate (18 decimals)
      */
- function _getCurrentExchangeRate() internal view returns (uint256 rate) {
-        if (useOracleForPricing && address(priceOracle) != address(0)) {
-            (uint256 oracleRate, uint256 timestamp, bool isValid) = priceOracle.getLatestPrice();
-            
-            // Check if oracle price is fresh and valid
-            if (isValid && (block.timestamp - timestamp) <= maxPriceAgeForSwaps) {
-                return oracleRate;
-            }
-            
-            // Oracle price is stale or invalid, reject swap
-            revert("Bridge: Oracle price too stale for swap");
-        }
+function _getCurrentExchangeRate() internal view returns (uint256) {
+    if (useOracleForPricing) {
+        (uint256 oracleRate, , bool isValid) = priceOracle.getLatestPrice();
         
-        // Fallback to manual rate
-        return ugxPerUSD;
+        // Validate oracle rate isn't too far from manual rate
+        uint256 maxDeviation = ugxPerUSD * 5 / 100; // 5% max deviation
+        require(
+            oracleRate <= ugxPerUSD + maxDeviation && 
+            oracleRate >= ugxPerUSD - maxDeviation,
+            "Oracle rate too far from manual rate"
+        );
+        
+        return oracleRate;
     }
-
+    return ugxPerUSD;
+}
 
 
  /**

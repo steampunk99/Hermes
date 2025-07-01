@@ -4,9 +4,9 @@ const { prisma, logger } = require('../config');
 exports.handleMMCallback = async (req, res, next) => {
   try {
     // Assume provider sends JSON with at least: externalId or reference (we used jobId as external reference), status, maybe transaction details.
-    const { externalId, reference, status, provider, transactionId } = req.body;
+    const { status, type, trans_id } = req.body;
     // externalId or reference should correspond to our MobileMoneyJob ID
-    const jobId = externalId || reference;
+    const jobId = trans_id;
     if (!jobId) {
       logger.warn("Received MM callback with no reference ID");
       return res.status(400).send("No reference ID");
@@ -18,8 +18,11 @@ exports.handleMMCallback = async (req, res, next) => {
     }
     // Update mmJob status based on callback
     let newStatus;
-    if (status === 'SUCCESS' || status === 'COMPLETED') {
-      newStatus = 'SUCCESS';
+    if (status === 'SUCCESSFUL') {
+      newStatus = 'SUCCESSFUL';
+    } else if (status === 'PENDING') {
+      newStatus = 'PENDING';
+    
     } else if (status === 'FAILED') {
       newStatus = 'FAIL';
     } else {
@@ -29,11 +32,11 @@ exports.handleMMCallback = async (req, res, next) => {
       where: { id: mmJob.id },
       data: {
         status: newStatus,
-        externalRef: transactionId || null  // record provider's transaction ID if provided
+        externalRef: trans_id  
       }
     });
     // If the job was a deposit (COLLECT) and succeeded, mint UGDX to user on-chain
-    if (mmJob.type === 'COLLECT' && newStatus === 'SUCCESS') {
+    if (mmJob.type === 'COLLECT' && newStatus === 'SUCCESSFUL') {
       // Calculate UGDX amount to mint from amountUGX (job.amountUGX is gross or net?)
       // In our record, mmJob.amountUGX is the requested amount. We calculated net and stored in transaction. 
       const txRecord = await prisma.transaction.findFirst({ where: { mmJobId: mmJob.id } });

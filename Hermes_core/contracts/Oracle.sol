@@ -180,21 +180,22 @@ contract UGDXPriceOracle is Ownable, Pausable, IPriceOracle {
      */
     function getHistoricalPrice(uint256 hoursAgo) external view override returns (uint256 rate, uint256 timestamp) {
         if (priceHistory.length == 0) {
-            return (0, 0);
-        }
+        return (0, 0);
+    }
 
-        uint256 targetTime = block.timestamp - (hoursAgo * 3600);
-        
-        // Find closest price to target time
-        for (uint256 i = priceHistory.length - 1; i >= 0; i--) {
-            if (priceHistory[i].timestamp <= targetTime) {
-                return (priceHistory[i].rate, priceHistory[i].timestamp);
-            }
-            if (i == 0) break; // Prevent underflow
+    uint256 targetTime = block.timestamp - (hoursAgo * 3600);
+    
+    // SAFE VERSION: Use while loop to prevent underflow
+    uint256 i = priceHistory.length;
+    while (i > 0) {
+        i--; // Decrement safely
+        if (priceHistory[i].timestamp <= targetTime) {
+            return (priceHistory[i].rate, priceHistory[i].timestamp);
         }
-        
-        // Return oldest price if no match found
-        return (priceHistory[0].rate, priceHistory[0].timestamp);
+    }
+    
+    // Return oldest price if no match found
+    return (priceHistory[0].rate, priceHistory[0].timestamp);
     }
 
     /**
