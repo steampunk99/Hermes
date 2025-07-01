@@ -194,7 +194,8 @@ function unpauseBridge() external onlyOwner {
      */
 function _getCurrentExchangeRate() internal view returns (uint256) {
     if (useOracleForPricing) {
-        (uint256 oracleRate, bool isValid) = priceOracle.getLatestPrice();
+       
+        (uint256 oracleRate, , ) = priceOracle.getLatestPrice();
         
         // Validate oracle rate isn't too far from manual rate
         uint256 maxDeviation = ugxPerUSD * 5 / 100; // 5% max deviation
@@ -327,13 +328,13 @@ function updateSwapFee(uint256 newFeeBps) external onlyOwner {
  /**
      * @dev Check if a swap would succeed with current conditions
      * @param usdtAmount Amount user wants to swap
-     * @return canSwap Whether swap would succeed
-     * @return reason Reason if swap would fail
+     * @return swapPossible Whether swap would succeed
+     * @return swapReason Reason if swap would fail
      * @return estimatedUGDX How much UGDX user would receive
      */
     function canSwap(uint256 usdtAmount) external view returns (
-        bool canSwap, 
-        string memory reason, 
+        bool swapPossible, 
+        string memory swapReason, 
         uint256 estimatedUGDX
     ) {
         if (paused()) {
