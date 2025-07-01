@@ -49,10 +49,11 @@ async function main() {
   console.log("UGDX token deployed to:", ugdxAddr);
 
   //
-  // 3) Price Oracle
+  // 3) Price Oracle - FIX: Add required constructor arguments
   //
   const OracleCF = await ethers.getContractFactory("UGDXPriceOracle");
-  const oracle = await OracleCF.deploy();
+  const initialRate = ethers.parseUnits("3700", 18); // 3700 UGX per USD with 18 decimals
+  const oracle = await OracleCF.deploy(initialRate, deployer.address);
   await waitDeployment(oracle);
   const oracleAddr = getDeployedAddress(oracle);
   console.log("UGDXPriceOracle deployed to:", oracleAddr);
@@ -66,7 +67,7 @@ async function main() {
 
   console.log(`UGDXBridge constructor expects ${ctorSize} args.`);
 
-  const usdtTokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // placeholder
+  const usdtTokenAddress = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // USDT on Polygon
   let bridge;
   if (ctorSize === 5) {
     bridge = await BridgeCF.deploy(
@@ -99,20 +100,30 @@ async function main() {
   console.log("UGDX owner is now:", await ugdx.owner());
 
   //
-  // 6) (Optional) Authorize deployer on Oracle
+  // 6) Authorize deployer as Oracle updater (using correct function name)
   //
-  if (typeof oracle.addUpdater === "function") {
-    try {
-      const t2 = await oracle.addUpdater(deployer.address);
-      await t2.wait();
-      console.log("Authorized deployer as Oracle updater");
-    } catch {
-      console.log("Skipping oracle.addUpdater (already set?)");
-    }
+  try {
+    console.log("Adding deployer as authorized oracle updater...");
+    const t2 = await oracle.addOracleSource(deployer.address);
+    await t2.wait();
+    console.log("Authorized deployer as Oracle updater");
+  } catch (error) {
+    console.log("Could not add oracle updater:", error.message);
   }
 
   //
-  // 7) Print .env entries
+  // 7) Print deployment summary
+  //
+  console.log("\n=== DEPLOYMENT SUMMARY ===");
+  console.log(`Deployer: ${deployer.address}`);
+  console.log(`Forwarder: ${forwarderAddr}`);
+  console.log(`UGDX Token: ${ugdxAddr}`);
+  console.log(`Oracle: ${oracleAddr} (Initial rate: 3700 UGX/USD)`);
+  console.log(`Bridge: ${bridgeAddr}`);
+  console.log(`UGDX Owner: ${await ugdx.owner()}`);
+
+  //
+  // 8) Print .env entries
   //
   console.log("\n=== COPY THESE TO .env ===");
   console.log(`FORWARDER_CONTRACT_ADDRESS=${forwarderAddr}`);
