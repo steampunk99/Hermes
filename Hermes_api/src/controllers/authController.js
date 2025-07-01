@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { prisma, logger, JWT_SECRET } = require('../config');
 const jwt = require('jsonwebtoken');
 const emailService = require('../services/emailService');
-
+const {ethers} = require('ethers')
 const OTP_EXPIRATION_MINUTES = 10;  // OTP valid for 10 minutes
 
 
@@ -31,28 +31,26 @@ class AuthController {
     // Generate a random 6-digit OTP code for email verification
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();  // 6-digit random
     const otpExpiresAt = new Date(Date.now() + OTP_EXPIRATION_MINUTES * 60000);
+
+    const wallet = ethers.Wallet.createRandom();
+
     // Create new user in DB (kycVerified = false until email verified)
     const newUser = await prisma.user.create({
       data: {
-        phone,
-        email,
-        passwordHash,
-        kycVerified: false,
-        gasCredit: 0,    // initial gas credit (could set a welcome amount if desired)
-        ugxCredit: 0,
-        role: 'user',
-        // Store OTP and expiration temporarily (not part of final data model usually; for MVP stored in ugxCredit as hack or separate field)
+           phone,
+          email,
+          passwordHash,
+          kycVerified: false,
+          otpCode: otpCode,
+          otpExpiresAt: otpExpiresAt,
+          walletAddress: wallet.address,
+          role: 'user',
+          gasCredit: 0,      // initial gas credit in UGX (e.g., 5000 UGX welcome credit)
+          ugxCredit: 0
       }
     });
-    // (Optional) store OTP in a separate verification table or in-memory. For simplicity, attach to user via an update:
-    await prisma.user.update({
-      where: { id: newUser.id },
-      data: { ugxCredit: 0 }  // In a real schema, we'd have fields for otpCode & otpExpires. Here just a placeholder.
-    });
-    // Actually, better: store OTP in a simple in-memory map or a static object since we do not have fields for it in schema:
-    newUser._otpCode = otpCode;
-    newUser._otpExpiresAt = otpExpiresAt;
-    // Send verification email with OTP code
+  
+
     try {
       await emailService.sendVerificationEmail(newUser.email, otpCode);
     } catch (emailErr) {
@@ -100,40 +98,41 @@ async verifyEmail (req, res, next)  {
 };
 
 // POST /auth/login
- async login (req, res, next)  {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required." });
+  async login(req, res, next) {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required." });
+      }
+      // Find user by email
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user) {
+        return res.status(401).json({ error: "Invalid credentials." });
+      }
+      // Ensure email is verified (KYC done)
+      if (!user.kycVerified) {
+        return res.status(403).json({ error: "Email not verified. Please verify your account before login." });
+      }
+      // Verify password
+      const validPass = await bcrypt.compare(password, user.passwordHash);
+      if (!validPass) {
+        return res.status(401).json({ error: "Invalid credentials." });
+      }
+      // Generate JWT token (include userId and role in payload)
+      const token = jwt.sign(
+        { userId: user.id, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '1d' }
+      );
+      logger.info(`User ${user.email} logged in successfully.`);
+      return res.json({
+        token,
+        user: { email: user.email, phone: user.phone, role: user.role }
+      });
+    } catch (err) {
+      next(err);
     }
-    // Find user by email
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return res.status(401).json({ error: "Invalid credentials." });
-    }
-    // Check if email is verified/KYC done
-    if (!user.kycVerified) {
-      return res.status(403).json({ error: "Email not verified. Please verify your account before login." });
-    }
-    // Compare password hash
-    const validPass = await bcrypt.compare(password, user.passwordHash);
-    if (!validPass) {
-      return res.status(401).json({ error: "Invalid credentials." });
-    }
-    // Generate JWT token (include userId and role in payload)
-    const token = jwt.sign(
-      { userId: user.id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '1d' }  // token valid for 1 day (for example)
-    );
-    logger.info(`User ${user.email} logged in.`);
-    // (Optional) return user profile data as well
-    return res.json({ token, user: { email: user.email, phone: user.phone, role: user.role } });
-  } catch (err) {
-    next(err);
-  }
-};
-
+  };
 
 }
 

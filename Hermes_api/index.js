@@ -1,11 +1,11 @@
 // src/index.js
 const express = require('express');
-const { logger, prisma, JWT_SECRET } = require('./config');  // import shared config
+const { logger, prisma, JWT_SECRET } = require('./src/config');  // import shared config
 const jwt = require('jsonwebtoken');
 
 const authRoutes = require('./src/routes/authRoutes');
 const userRoutes = require('./src/routes/userRoutes');
-const transactionRoutes = require('./routes/transactionRoutes');
+const transactionRoutes = require('./src/routes/transactionRoutes');
 const webhookRoutes = require('./src/routes/webhookRoutes');
 
 const app = express();
