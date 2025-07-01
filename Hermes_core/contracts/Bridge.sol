@@ -194,7 +194,7 @@ function unpauseBridge() external onlyOwner {
      */
 function _getCurrentExchangeRate() internal view returns (uint256) {
     if (useOracleForPricing) {
-        (uint256 oracleRate, , bool isValid) = priceOracle.getLatestPrice();
+        (uint256 oracleRate, bool isValid) = priceOracle.getLatestPrice();
         
         // Validate oracle rate isn't too far from manual rate
         uint256 maxDeviation = ugxPerUSD * 5 / 100; // 5% max deviation

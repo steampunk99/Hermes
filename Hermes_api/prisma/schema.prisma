@@ -8,6 +8,8 @@ generator client {
   provider = "prisma-client-js"
 }
 
+
+
 // User model: stores basic user info and KYC/verification status
 model User {
   id            String   @id @default(uuid())           // Unique user ID (UUID)
@@ -45,9 +47,16 @@ model Transaction {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  mmJob    MobileMoneyJob? @relation(fields: [mmJobId], references: [id])
-  mmJobId  Int?
+  mmJob    MobileMoneyJob?  @relation(fields: [mmJobId], references: [id])
+  mmJobId  Int? @unique
 }
+
+model OraclePrice {
+  id          Int      @id @default(1)
+  currentRate Decimal   // latest UGX per USD rate
+  lastUpdated DateTime  // timestamp of last price update
+}
+
 
 enum TransactionType {
   MINT
