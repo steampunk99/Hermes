@@ -1,7 +1,7 @@
 // src/routes/userRoutes.js
 const express = require('express');
 const router = express.Router();
-const userController = require('../controllers/userController');
+const userController = require('../controllers/users');
 
 // Middleware to restrict access to advanced users only
 function requireAdvanced(req, res, next) {

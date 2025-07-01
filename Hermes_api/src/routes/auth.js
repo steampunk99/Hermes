@@ -1,7 +1,7 @@
 // src/routes/authRoutes.js
 const express = require('express');
 const router = express.Router();
-const authController = require('../controllers/authController');
+const authController = require('../controllers/auth');
 
 // User registration (sign up)
 router.post('/register', authController.register);

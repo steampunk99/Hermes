@@ -35,30 +35,31 @@ exports.handleMMCallback = async (req, res, next) => {
         externalRef: trans_id  
       }
     });
-    // If the job was a deposit (COLLECT) and succeeded, mint UGDX to user on-chain
-    if (mmJob.type === 'COLLECT' && newStatus === 'SUCCESSFUL') {
-      // Calculate UGDX amount to mint from amountUGX (job.amountUGX is gross or net?)
-      // In our record, mmJob.amountUGX is the requested amount. We calculated net and stored in transaction. 
+
+
+        if (mmJob && mmJob.type === 'COLLECT' && status === 'SUCCESSFUL') {
       const txRecord = await prisma.transaction.findFirst({ where: { mmJobId: mmJob.id } });
       if (txRecord && txRecord.type === 'MINT') {
         const ugdxAmount = txRecord.ugdxAmount;
-        // Mint UGDX to user's wallet
         try {
-          const mintTx = await ugdxContract.mint(mmJob.user.walletAddress, ethers.utils.parseUnits(ugdxAmount.toString(), 18));
+          // Use Bridge contract to mint tokens to user (Bridge will update reserves internally)
+          const amountBN = ethers.utils.parseUnits(ugdxAmount.toString(), 18);
+          const mintTx = await bridgeContract.mintTo(mmJob.user.walletAddress, amountBN);
           await mintTx.wait();
-          logger.info(`Minted ${ugdxAmount} UGDX to ${mmJob.userId}'s wallet after MM deposit success.`);
+          logger.info(`Minted ${ugdxAmount} UGDX to ${mmJob.user.walletAddress} via Bridge (txHash: ${mintTx.hash}).`);
+          // Mark transaction as completed with the on-chain tx hash
+          await prisma.transaction.update({
+            where: { id: txRecord.id },
+            data: { status: "COMPLETED", txHash: mintTx.hash }
+          });
         } catch (err) {
-          logger.error("Minting UGDX failed:", err);
+          logger.error("Minting UGDX via Bridge contract failed:", err);
         }
-        // Update transaction status to COMPLETED
-        await prisma.transaction.update({
-          where: { id: txRecord.id },
-          data: { status: "COMPLETED", txHash: mintTx.hash }
-        });
       }
     }
+
     // If the job was a withdrawal (DISBURSE) and succeeded, finalize the Transaction (which should already have had tokens burned on-chain)
-    if (mmJob.type === 'DISBURSE' && newStatus === 'SUCCESS') {
+    if (mmJob.type === 'DISBURSE' && newStatus === 'SUCCESSFUL') {
       const txRecords = await prisma.transaction.findMany({ where: { mmJobId: mmJob.id } });
       for (let tx of txRecords) {
         // Mark each related transaction as completed

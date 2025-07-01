@@ -1,17 +1,17 @@
-// src/index.js
 const express = require('express');
-const { logger, prisma, JWT_SECRET } = require('./src/config');  // import shared config
+const { logger, prisma, JWT_SECRET } = require('./src/config'); 
 const jwt = require('jsonwebtoken');
 
-const authRoutes = require('./src/routes/authRoutes');
-const userRoutes = require('./src/routes/userRoutes');
-const transactionRoutes = require('./src/routes/transactionRoutes');
-const webhookRoutes = require('./src/routes/webhookRoutes');
+const authRoutes = require('./src/routes/auth');
+const userRoutes = require('./src/routes/users');
+const transactionRoutes = require('./src/routes/transactions');
+const webhookRoutes = require('./src/routes/webhook');
+const monitorRoutes = require('./src/routes/monitor'); 
 
 const app = express();
-app.use(express.json());  // parse JSON request bodies
+app.use(express.json());  
 
-// Simple request logger middleware (using Winston)
+
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url}`);
   next();
@@ -38,7 +38,8 @@ function authenticateToken(req, res, next) {
 // Mount public routes
 app.use('/auth', authRoutes);
 app.use('/webhook', webhookRoutes);
-app.get('/rates/current', transactionRoutes);  // allow public access to current rates
+app.get('/rates/current', transactionRoutes);  
+app.get('/monitor', monitorRoutes);  
 
 // Protected routes (use authenticateToken middleware)
 app.use('/user', authenticateToken, userRoutes);
@@ -53,7 +54,7 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
 });
 
-// Start the server
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info(`Hermes v2 backend running on port ${PORT}`);
