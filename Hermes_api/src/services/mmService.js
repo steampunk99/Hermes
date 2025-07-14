@@ -1,6 +1,7 @@
 const axios = require('axios');
-const config = require('../config/ugandaMobileMoneyConfig');
-const logger = require('../services/logger.service');
+const config = require('../config/mmConfig');
+const logger = require('../services/logger');
+
 
 class UgandaMobileMoneyUtil {
   async requestToPay(payment) {

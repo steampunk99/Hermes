@@ -1,7 +1,7 @@
 // src/routes/transactionRoutes.js
 const express = require('express');
 const router = express.Router();
-const transactionController = require('../controllers/transactionController');
+const transactionController = require('../controllers/transactions');
 
 // Mint UGDX (deposit UGX via mobile money)
 router.post('/mint', transactionController.mintUGDX);

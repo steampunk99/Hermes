@@ -2,7 +2,7 @@
 const { bridgeContract } = require('../config');
 const { ethers } = require('ethers');
 
-const { updateExchangeRate } = require('../jobs/oracleRateJob');
+const { updateExchangeRate } = require('../jobs/oracleRate');
 const { oracleContract } = require('../config');
 
 

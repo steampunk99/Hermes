@@ -1,6 +1,5 @@
-// src/config/index.js
-require('dotenv').config();  // Load .env file
 
+require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 const winston = require('winston');
 const { ethers } = require('ethers');
@@ -23,7 +22,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const PROVIDER_FEE_BPS = parseInt(process.env.PROVIDER_FEE_BPS || "50"); // e.g., 0.5% fee
 
 // Configure Ethers provider (connect to Ethereum/Polygon network)
-const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 // Create a signer from relayer private key (this account pays gas for meta-tx)
 const relayer = new ethers.Wallet(process.env.RELAYER_PRIVATE_KEY, provider);
 

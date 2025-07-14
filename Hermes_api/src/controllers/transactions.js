@@ -207,7 +207,14 @@ class TransactionController {
       const { fee, net } = applyProviderFee(amountUGDX);
       const ugxToSend = net;
       // Create MobileMoneyJob and Transaction records (type "SEND")
-      const mmJob = await prisma.mobileMoneyJob.create({ ... type: "DISBURSE", amount: ugxToSend, phone: targetPhone, ... });
+      const mmJob = await prisma.mobileMoneyJob.create({data: {
+        userId,
+        phone: targetPhone,
+        amountUGX: ugxToSend,
+        type: "DISBURSE",
+        provider: providerName,
+        status: "PENDING"
+      }});
       const txn = await prisma.transaction.create({ data: {
         userId,
         type: "SEND",
