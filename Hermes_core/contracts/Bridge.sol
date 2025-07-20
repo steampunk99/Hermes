@@ -24,7 +24,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
     UGDX public immutable ugdxToken;
     IERC20 public immutable usdtToken;
 
-     IPriceOracle public priceOracle;
+    IPriceOracle public priceOracle;
     uint256 public maxPriceAgeForSwaps = 3600; // 1 hour max
     bool public useOracleForPricing = false;
 
@@ -33,7 +33,11 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
 
     //fee settings in basis points
     uint256 public swapFeeBps = 50; //0.5%
+    uint256 public burnFeeBps = 25; //0.25% default
     uint256 public constant MAX_FEE_BPS = 500; // 5%
+
+    //Fee recipient
+    address public feeRecipient;
 
     //Reserve tracking
     uint256 public totalUSDTReserves;
@@ -47,6 +51,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         uint256 feeAmount,
         uint256 exchangeRate
     );
+    event FeeCollected(address indexed from, uint256 amount, string feeType);
 
     event UGDXBurnedForWithdrawal(
         address indexed user,
@@ -83,6 +88,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         if(_priceOracle != address(0)){
             priceOracle = IPriceOracle(_priceOracle);
         }
+        feeRecipient = _initialOwner;
     }
 
 
@@ -117,14 +123,19 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         // Calculate and deduct fee
         uint256 feeAmount = (ugdxAmountBeforeFee * swapFeeBps) / 10000;
         uint256 ugdxAmountAfterFee = ugdxAmountBeforeFee - feeAmount;
-        
+
         // Update reserves
         totalUSDTReserves += usdtAmount;
         totalUGDXMinted += ugdxAmountAfterFee;
-        
+
         // Mint UGDX to user
         ugdxToken.mint(sender, ugdxAmountAfterFee);
-        
+        // Mint fee to feeRecipient
+        if (feeAmount > 0 && feeRecipient != address(0)) {
+            ugdxToken.mint(feeRecipient, feeAmount);
+            emit FeeCollected(sender, feeAmount, "swap");
+        }
+
         emit USDTSwappedForUGDX(
             sender, 
             usdtAmount, 
@@ -145,14 +156,40 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
      */
 
    function burnForWithdrawal(uint256 ugdxAmount) external whenNotPaused nonReentrant {
-    require(ugdxAmount > 0, "Bridge: Amount must be > 0");
-    
-    address sender = _msgSender();
-    require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Insufficient balance");
-    ugdxToken.burnFrom(sender, ugdxAmount); // Direct burn
+        require(ugdxAmount > 0, "Bridge: Amount must be > 0");
+        address sender = _msgSender();
+        require(ugdxToken.balanceOf(sender) >= ugdxAmount, "Insufficient balance");
 
-    totalUGDXMinted -= ugdxAmount;
-    emit UGDXBurnedForWithdrawal(sender, ugdxAmount, block.timestamp);
+        // Calculate burn fee
+        uint256 feeAmount = (ugdxAmount * burnFeeBps) / 10000;
+        uint256 burnAmount = ugdxAmount - feeAmount;
+
+        // Burn net amount
+        ugdxToken.burnFrom(sender, burnAmount);
+        // Collect fee
+        if (feeAmount > 0 && feeRecipient != address(0)) {
+            ugdxToken.burnFrom(sender, feeAmount); // Optionally, could transfer to feeRecipient, but burning is more deflationary
+            ugdxToken.mint(feeRecipient, feeAmount);
+            emit FeeCollected(sender, feeAmount, "burn");
+        }
+
+        totalUGDXMinted -= ugdxAmount;
+        emit UGDXBurnedForWithdrawal(sender, ugdxAmount, block.timestamp);
+    /**
+     * @dev Set fee recipient address
+     */
+    function setFeeRecipient(address newRecipient) external onlyOwner {
+        require(newRecipient != address(0), "Bridge: Invalid fee recipient");
+        feeRecipient = newRecipient;
+    }
+
+    /**
+     * @dev Update burn fee
+     */
+    function updateBurnFee(uint256 newFeeBps) external onlyOwner {
+        require(newFeeBps <= MAX_FEE_BPS, "Bridge: Fee too high");
+        burnFeeBps = newFeeBps;
+    }
 }
 
 /**
