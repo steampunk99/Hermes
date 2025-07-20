@@ -35,11 +35,23 @@ const UGDX_ABI = [
   "function burnFrom(address account, uint256 amount) public"   // optional, if implemented
 ];
 const BRIDGE_ABI = [
-  "function burnForWithdrawal(uint256 amount) public",          // user burns UGDX via Bridge (meta-tx friendly) 
-  "function SwapUSDTForUGDX(uint256 usdtAmount) public",        // swap USDT to mint UGDX (not used in direct MM flow)
-  "function ugxPerUSD() view returns(uint256)",                 // exchange rate (UGX per 1 USD)
+  // Core swap functions
+  "function burnForWithdrawal(uint256 amount) external",          
+  "function SwapUSDTForUGDX(uint256 usdtAmount) external",        
+  
+  // View functions
+  "function ugxPerUSD() view returns(uint256)",                 
   "function useOracleForPricing() view returns(bool)",
-  "function priceOracle() view returns(address)"
+  "function priceOracle() view returns(address)",
+  "function owner() view returns (address)",
+  "function getBridgeStatus() view returns (uint256 currentRate, uint8 rateSource, uint256 rateTimestamp, bool rateIsValid, bool oracleHealthy, uint256 usdtReserves, uint256 ugdxMinted, uint256 currentFee, bool isPaused)",
+  
+  // Oracle management
+  "function setOraclePricingMode(bool useOracle) external",
+  
+  // Events
+  "event PricingModeChanged(bool useOracle)",
+  "event OracleUpdated(address indexed oldOracle, address indexed newOracle)"
 ];
 const FORWARDER_ABI = [
   // Minimal Forwarder ABI (OpenZeppelin ERC2771 minimal forwarder functions)
@@ -47,10 +59,20 @@ const FORWARDER_ABI = [
   "function getNonce(address from) public view returns (uint256)"
 ];
 
+const ORACLE_ABI = [
+  "function updatePrice(uint256 newRate) external",
+  "function getLatestPrice() external view returns (uint256, uint256, bool)",
+  "function isOracleHealthy() external view returns (bool)",
+  "function owner() external view returns (address)",
+  "function isAuthorizedUpdater(address) external view returns (bool)",
+  "function addOracleSource(address updater) external"  // Added for authorization management
+];
+
 // Initialize contract instances with Ethers
 const ugdxContract = new ethers.Contract(process.env.UGDX_CONTRACT_ADDRESS, UGDX_ABI, relayer);
 const bridgeContract = new ethers.Contract(process.env.BRIDGE_CONTRACT_ADDRESS, BRIDGE_ABI, relayer);
 const forwarderContract = new ethers.Contract(process.env.FORWARDER_CONTRACT_ADDRESS, FORWARDER_ABI, relayer);
+const oracleContract = new ethers.Contract(process.env.ORACLE_CONTRACT_ADDRESS, ORACLE_ABI, relayer);
 
 // Export all common configs
 module.exports = {
@@ -62,5 +84,6 @@ module.exports = {
   ugdxContract,
   bridgeContract,
   forwarderContract,
+  oracleContract,
   PROVIDER_FEE_BPS
 };

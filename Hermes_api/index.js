@@ -1,6 +1,7 @@
 const express = require('express');
 const { logger, prisma, JWT_SECRET } = require('./src/config'); 
 const jwt = require('jsonwebtoken');
+const { startOracleRateJob, updateExchangeRate } = require('./src/jobs/oracleRate');
 
 const authRoutes = require('./src/routes/auth');
 const userRoutes = require('./src/routes/users');
@@ -38,8 +39,8 @@ function authenticateToken(req, res, next) {
 // Mount public routes
 app.use('/auth', authRoutes);
 app.use('/webhook', webhookRoutes);
-app.get('/rates/current', transactionRoutes);  
-app.get('/monitor', monitorRoutes);  
+app.use('/rates/current', transactionRoutes);  
+app.use('/monitor', monitorRoutes);  
 
 // Protected routes (use authenticateToken middleware)
 app.use('/user', authenticateToken, userRoutes);
@@ -58,9 +59,16 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info(`Hermes v2 backend running on port ${PORT}`);
+  
+  // Start the oracle rate update job
+  startOracleRateJob();
 });
 
 //db connection check
 prisma.$connect()
-  .then(() => logger.info("Connected to database successfully."))
+  .then(() => {
+    logger.info("Connected to database successfully.");
+    // Trigger initial oracle rate update
+    updateExchangeRate().catch(err => logger.error("Initial oracle update failed:", err));
+  })
   .catch(err => logger.error("Database connection failed:", err));

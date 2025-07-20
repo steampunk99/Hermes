@@ -86,7 +86,12 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         usdtToken = IERC20(_usdtToken);
 
         if(_priceOracle != address(0)){
-            priceOracle = IPriceOracle(_priceOracle);
+            // Try to validate oracle interface
+            try IPriceOracle(_priceOracle).getLatestPrice() returns (uint256, uint256, bool) {
+                priceOracle = IPriceOracle(_priceOracle);
+            } catch {
+                revert("Bridge: Invalid oracle interface");
+            }
         }
         feeRecipient = _initialOwner;
     }
@@ -175,9 +180,12 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
 
         totalUGDXMinted -= ugdxAmount;
         emit UGDXBurnedForWithdrawal(sender, ugdxAmount, block.timestamp);
+   }
+        
     /**
      * @dev Set fee recipient address
      */
+
     function setFeeRecipient(address newRecipient) external onlyOwner {
         require(newRecipient != address(0), "Bridge: Invalid fee recipient");
         feeRecipient = newRecipient;
@@ -190,7 +198,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
         require(newFeeBps <= MAX_FEE_BPS, "Bridge: Fee too high");
         burnFeeBps = newFeeBps;
     }
-}
+
 
 /**
  * @dev Emergency withdraw tokens (circuit breaker)
@@ -312,6 +320,35 @@ function _getCurrentExchangeRate() internal view returns (uint256) {
     function emergencyDisableOracle() external onlyOwner {
         useOracleForPricing = false;
         emit PricingModeChanged(false);
+    }
+
+    /**
+     * @dev Enable or disable oracle-based pricing
+     * @param useOracle Whether to use oracle for pricing
+     */
+    function setOraclePricingMode(bool useOracle) external onlyOwner {
+        require(address(priceOracle) != address(0), "Bridge: Oracle not set");
+        
+        if (useOracle) {
+            // Check oracle health
+            require(priceOracle.isOracleHealthy(), "Bridge: Oracle not healthy");
+            
+            // Validate we can get a price
+            (uint256 oracleRate, uint256 timestamp, bool isValid) = priceOracle.getLatestPrice();
+            require(isValid, "Bridge: Oracle price invalid");
+            require(block.timestamp - timestamp <= maxPriceAgeForSwaps, "Bridge: Oracle price too old");
+            
+            // Check price isn't too far from manual rate
+            uint256 maxDeviation = ugxPerUSD * 5 / 100; // 5% max deviation
+            require(
+                oracleRate >= ugxPerUSD - maxDeviation && 
+                oracleRate <= ugxPerUSD + maxDeviation,
+                "Bridge: Oracle price deviation too high"
+            );
+        }
+        
+        useOracleForPricing = useOracle;
+        emit PricingModeChanged(useOracle);
     }
 
 /**
