@@ -111,12 +111,20 @@ function initEventListeners() {
     }
   });
 
-  // Listen for price update events from the Oracle
-  oracleWs.on('PriceUpdated', async (oldRate, newRate, timestamp, updater, event) => {
+  // Listen for price update events from the Oracle (ethers v6 syntax)
+  logger.info('Subscribing to Oracle PriceUpdated events (ethers v6)...');
+  oracleWs.on('PriceUpdated', async (log) => {
     try {
+      const { oldRate, newRate, timestamp, updater } = log.args;
+      logger.info('Oracle PriceUpdated event received:', {
+        oldRate: oldRate.toString(),
+        newRate: newRate.toString(),
+        timestamp: timestamp.toString(),
+        updater
+      });
       const oldRateVal = parseFloat(ethers.utils.formatUnits(oldRate, 18));
       const newRateVal = parseFloat(ethers.utils.formatUnits(newRate, 18));
-      const time = new Date(timestamp.toNumber() * 1000);
+      const time = new Date(Number(timestamp) * 1000);
       logger.info(`Event PriceUpdated: rate changed from ${oldRateVal} to ${newRateVal} UGX/USD at ${time.toISOString()}`);
       // Upsert the latest price in the database for caching/monitoring
       await prisma.oraclePrice.upsert({
@@ -127,6 +135,12 @@ function initEventListeners() {
     } catch (err) {
       logger.error("Error processing PriceUpdated event:", err);
     }
+  });
+  oracleWs.on('error', err => {
+    logger.error('OracleWs contract event error:', err);
+  });
+  oracleWs.on('close', () => {
+    logger.error('OracleWs contract event stream closed.');
   });
 
   // Handle WebSocket connection errors and auto-reconnect

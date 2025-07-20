@@ -153,4 +153,34 @@ exports.setOracleMode = async (req, res) => {
     logger.error("Failed to enable oracle pricing:", err.message);
     return res.status(500).json({ error: "Failed to enable oracle pricing", details: err.message });
   }
+
+
+};
+
+exports.disableOracleMode = async (req, res) => {
+  try {
+    // Check ownership
+    const owner = await bridgeContract.owner();
+    const relayerAddress = await relayer.getAddress();
+    
+    if (owner.toLowerCase() !== relayerAddress.toLowerCase()) {
+      return res.status(403).json({ 
+        error: "Permission denied", 
+        details: `Relayer ${relayerAddress} is not the bridge owner (${owner})`
+      });
+    }
+
+    // Set oracle pricing mode to false
+    const tx = await bridgeContract.setOraclePricingMode(false);
+    await tx.wait();
+
+    logger.info("Oracle pricing mode disabled successfully");
+    return res.json({ 
+      message: "Oracle pricing mode disabled",
+      transaction: tx.hash
+    });
+  } catch (err) {
+    logger.error("Failed to disable oracle pricing:", err.message);
+    return res.status(500).json({ error: "Failed to disable oracle pricing", details: err.message });
+  }
 };
