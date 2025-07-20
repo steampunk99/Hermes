@@ -1,27 +1,28 @@
 
-const { bridgeContract } = require('../config');
-const { ethers } = require('ethers');
-
+const { bridgeContract, oracleContract, relayer, logger } = require('../config');
+const { formatUnits } = require('ethers');
 const { updateExchangeRate } = require('../jobs/oracleRate');
-const { oracleContract } = require('../config');
 
 
 exports.getBridgeStatus = async (req, res) => {
   try {
     // Fetch comprehensive status from the Bridge contract
-    const [rateBN, rateSource, rateTimestamp, rateValid, oracleHealthy, reservesBN, mintedBN, feeBps, isPaused] =
-      await bridgeContract.getBridgeStatus();  // single call returns all key metrics:contentReference[oaicite:4]{index=4}:contentReference[oaicite:5]{index=5}
-    const currentRate = parseFloat(ethers.utils.formatUnits(rateBN, 18));
-    const source = rateSource.toNumber() === 1 ? "oracle" : "manual";
-    const totalUSDTReserves = parseFloat(ethers.utils.formatUnits(reservesBN, 6));
-    const totalUGDXMinted = parseFloat(ethers.utils.formatUnits(mintedBN, 18));
+    const [rateBN, rateSourceRaw, rateTimestamp, rateValid, oracleHealthy, reservesBN, mintedBN, feeBps, isPaused] =
+      await bridgeContract.getBridgeStatus();
+    const currentRate = parseFloat(formatUnits(rateBN.toString(), 18));
+    const totalUSDTReserves = parseFloat(formatUnits(reservesBN.toString(), 6));
+    const totalUGDXMinted = parseFloat(formatUnits(mintedBN.toString(), 18));
+    // Always get oracleMode directly from contract
+    const oracleMode = await bridgeContract.useOracleForPricing();
+    // Set rateSource based on oracleMode
+    const rateSource = oracleMode ? "oracle" : "manual";
     return res.json({
       paused: isPaused,
       currentRate,
-      rateSource: source,
-      oracleMode: rateSource.toNumber() === 1,
-      oracleHealthy: oracleHealthy,
-      swapFeePercent: feeBps.toNumber() / 100.0,   // e.g. 50 => 0.50%
+      rateSource,
+      oracleMode,
+      oracleHealthy,
+      swapFeePercent: Number(feeBps) / 10000,   // 50 => 0.0050
       totalUSDTReserves,
       totalUGDXMinted
     });
@@ -32,13 +33,11 @@ exports.getBridgeStatus = async (req, res) => {
 
 exports.getReservesStatus = async (req, res) => {
   try {
-    // Query on-chain reserves and supply
-    const reservesBN = await bridgeContract.totalUSDTReserves();
-    const mintedBN = await bridgeContract.totalUGDXMinted();
-    const rateBN = await bridgeContract.ugxPerUSD();
-    const reservesUSDT = parseFloat(ethers.utils.formatUnits(reservesBN, 6));
-    const supplyUGX = parseFloat(ethers.utils.formatUnits(mintedBN, 18));
-    const manualRate = parseFloat(ethers.utils.formatUnits(rateBN, 18));
+    // Get all values from getBridgeStatus
+    const [rateBN, , , , , reservesBN, mintedBN] = await bridgeContract.getBridgeStatus();
+    const reservesUSDT = parseFloat(formatUnits(reservesBN.toString(), 6));
+    const supplyUGX = parseFloat(formatUnits(mintedBN.toString(), 18));
+    const manualRate = parseFloat(formatUnits(rateBN.toString(), 18));
     // Calculate collateralization ratio: USDT reserves vs UGDX supply (in USD terms)
     let collateralRatio = supplyUGX > 0 ? ((reservesUSDT / (supplyUGX / manualRate)) * 100).toFixed(2) + '%' : 'N/A';
     return res.json({
@@ -66,21 +65,92 @@ exports.triggerUpdateRate = async (req, res) => {
 
 exports.getOracleHealth = async (req, res) => {
   try {
+    // Get Oracle details
     const [rateBN, lastTs, isValid] = await oracleContract.getLatestPrice();
     const oracleHealthy = await oracleContract.isOracleHealthy();
-    const currentRate = parseFloat(ethers.utils.formatUnits(rateBN, 18));
-    const lastUpdate = new Date(lastTs.toNumber() * 1000);
-    // Calculate how old the price is (in seconds)
+    const currentRate = parseFloat(formatUnits(rateBN.toString(), 18));
+    const lastUpdate = new Date(Number(lastTs) * 1000);
     const now = Date.now();
     const ageSeconds = Math.floor((now - lastUpdate.getTime()) / 1000);
+
+    // Get Bridge details
+    const bridgeOracleAddress = await bridgeContract.priceOracle();
+    const bridgeOwner = await bridgeContract.owner();
+    const bridgeUsingOracle = await bridgeContract.useOracleForPricing();
+
+    // Get authorization status
+    const relayerAddress = await relayer.getAddress();
+    const isUpdater = await oracleContract.isAuthorizedUpdater(relayerAddress);
+    const oracleOwner = await oracleContract.owner();
+
     return res.json({
-      currentRate,
-      lastUpdate: lastUpdate.toISOString(),
-      priceIsFresh: isValid,
-      oracleHealthy: oracleHealthy,
-      priceAgeSeconds: ageSeconds
+      oracle: {
+        address: oracleContract.target,
+        owner: oracleOwner,
+        currentRate,
+        lastUpdate: lastUpdate.toISOString(),
+        priceIsFresh: isValid,
+        oracleHealthy,
+        priceAgeSeconds: ageSeconds,
+        isRelayerAuthorized: isUpdater
+      },
+      bridge: {
+        address: bridgeContract.target,
+        owner: bridgeOwner,
+        configuredOracleAddress: bridgeOracleAddress,
+        usingOracleForPricing: bridgeUsingOracle
+      },
+      relayer: {
+        address: relayerAddress
+      }
     });
   } catch (err) {
     return res.status(500).json({ error: "Failed to fetch oracle health", details: err.message });
+  }
+};
+
+exports.setOracleMode = async (req, res) => {
+  try {
+    // Check ownership
+    const owner = await bridgeContract.owner();
+    const relayerAddress = await relayer.getAddress();
+    
+    if (owner.toLowerCase() !== relayerAddress.toLowerCase()) {
+      return res.status(403).json({ 
+        error: "Permission denied", 
+        details: `Relayer ${relayerAddress} is not the bridge owner (${owner})`
+      });
+    }
+
+    // Check if oracle address is set
+    const oracleAddress = await bridgeContract.priceOracle();
+    if (oracleAddress === "0x0000000000000000000000000000000000000000") {
+      return res.status(400).json({ 
+        error: "Oracle not configured", 
+        details: "Oracle address is not set in bridge contract" 
+      });
+    }
+
+    // Check if oracle is healthy
+    const isHealthy = await oracleContract.isOracleHealthy();
+    if (!isHealthy) {
+      return res.status(400).json({ 
+        error: "Cannot enable oracle pricing", 
+        details: "Oracle is not healthy" 
+      });
+    }
+
+    // Set oracle pricing mode to true
+    const tx = await bridgeContract.setOraclePricingMode(true);
+    await tx.wait();
+
+    logger.info("Oracle pricing mode enabled successfully");
+    return res.json({ 
+      message: "Oracle pricing mode enabled",
+      transaction: tx.hash
+    });
+  } catch (err) {
+    logger.error("Failed to enable oracle pricing:", err.message);
+    return res.status(500).json({ error: "Failed to enable oracle pricing", details: err.message });
   }
 };
