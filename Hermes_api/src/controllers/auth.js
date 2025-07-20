@@ -44,7 +44,7 @@ class AuthController {
           otpCode: otpCode,
           otpExpiresAt: otpExpiresAt,
           walletAddress: wallet.address,
-          role: 'user',
+          role: 'USER',
           gasCredit: 0,      // initial gas credit in UGX (e.g., 5000 UGX welcome credit)
           ugxCredit: 0
       }
@@ -76,13 +76,12 @@ async verifyEmail (req, res, next)  {
     if (!user) {
       return res.status(400).json({ error: "Invalid email or code." });
     }
-    // (In a real app, user._otpCode would not be stored in DB permanently. 
-    // For this MVP, assume we somehow retrieved the OTP and expiry attached to user object after registration.)
-    if (!user._otpCode) {
+    // Check if OTP code and expiry exist
+    if (!user.otpCode) {
       return res.status(400).json({ error: "No pending verification for this user." });
     }
     // Check OTP code and expiration
-    if (code !== user._otpCode || new Date() > user._otpExpiresAt) {
+    if (code !== user.otpCode || new Date() > user.otpExpiresAt) {
       return res.status(400).json({ error: "Invalid or expired verification code." });
     }
     // Mark user as verified (kycVerified true)

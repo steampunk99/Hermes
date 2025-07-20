@@ -59,3 +59,8 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   logger.info(`Hermes v2 backend running on port ${PORT}`);
 });
+
+//db connection check
+prisma.$connect()
+  .then(() => logger.info("Connected to database successfully."))
+  .catch(err => logger.error("Database connection failed:", err));
