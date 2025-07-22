@@ -58,7 +58,10 @@ const BRIDGE_ABI = [
   // Events
   "event PricingModeChanged(bool useOracle)",
   "event OracleUpdated(address indexed oldOracle, address indexed newOracle)",
-  "event MobileMoneyMintUGDX(address indexed user, uint256 ugdxAmount, uint256 timestamp)"
+  "event MobileMoneyMintUGDX(address indexed user, uint256 ugdxAmount, uint256 timestamp)",
+  "event UGDXBurnedForWithdrawal(address indexed user, uint256 ugdxAmount, uint256 timestamp)",
+  "event FeeCollected(address indexed from, uint256 amount, string feeType)",
+  "event USDTSwappedForUGDX(address indexed user, uint256 usdtAmount, uint256 ugdxAmount, uint256 feeAmount, uint256 exchangeRate)"
 ];
 const FORWARDER_ABI = [
   // Minimal Forwarder ABI (OpenZeppelin ERC2771 minimal forwarder functions)

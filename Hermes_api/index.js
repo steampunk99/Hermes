@@ -47,6 +47,7 @@ app.use('/monitor', monitorRoutes);
 // Protected routes (use authenticateToken middleware)
 app.use('/user', authenticateToken, userRoutes);
 app.use('/transactions', authenticateToken, transactionRoutes);
+// Admin routes
 app.use('/admin/payments', authenticateToken, require('./src/routes/adminPayments'));
 app.use('/security', authenticateToken, securityRoutes);
 

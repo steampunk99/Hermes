@@ -41,6 +41,7 @@ model User {
   mmJobs       MobileMoneyJob[] // Mobile money jobs initiated by user
   gasDrips     GasDrip[]        // Gas credit usage or top-up records
   securityViolations SecurityViolation[] // Security violations by this user
+  feeCollections FeeCollection[] // Fees paid by this user
 }
 
 // Transaction model: records mint, redeem, and send transactions for history
@@ -162,4 +163,26 @@ model SecurityViolation {
   @@index([violationType])                             // For violation type analysis
   @@index([severity])                                  // For severity-based queries
   @@index([createdAt])                                 // For time-based analysis
+}
+
+// Fee collection tracking model for HyperAdmin reconciliation
+model FeeCollection {
+  id            String   @id @default(cuid())
+  userId        String                                // User who paid the fee
+  feeType       String                                // "swap" or "burn"
+  feeAmount     Decimal                               // Fee amount in UGDX
+  originalAmount Decimal                              // Original transaction amount
+  txHash        String   @unique                     // On-chain transaction hash
+  blockNumber   Int                                   // Block number for verification
+  feeRecipient  String                               // Address that received the fee
+  createdAt     DateTime @default(now())
+  processedAt   DateTime @updatedAt
+  
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+  
+  @@index([userId])                                   // For user fee queries
+  @@index([feeType])                                  // For fee type analysis
+  @@index([txHash])                                   // For transaction lookup
+  @@index([createdAt])                                // For time-based analysis
 }

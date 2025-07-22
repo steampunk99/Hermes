@@ -5,6 +5,140 @@ const { ethers } = require('ethers');
 
 class AdminPaymentController {
 
+  
+/**
+ * @desc    Get treasury overview and fee collections
+ * @route   GET /api/admin/finance/treasury
+ * @access  Private/Admin
+ */
+async getTreasuryOverview(req, res) {
+  try {
+    // 1. Get total fees collected
+    const feeSummary = await prisma.feeCollection.groupBy({
+      by: ['feeType'],
+      _sum: {
+        amount: true,
+      },
+      _count: {
+        id: true,
+      },
+    });
+
+    // 2. Get recent fee collections
+    const recentFees = await prisma.feeCollection.findMany({
+      take: 10,
+      orderBy: {
+        timestamp: 'desc',
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            walletAddress: true,
+          },
+        },
+      },
+    });
+
+    // 3. Get bridge stats (from contract or cache)
+    // TODO: Add bridge.getBridgeStatus() call here
+
+    res.json({
+      success: true,
+      data: {
+        feeSummary,
+        recentFees,
+        // bridgeStats: ...
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get treasury overview:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to load treasury data',
+    });
+  }
+}
+
+/**
+ * @desc    Get user's on-chain UGDX balance
+ * @route   GET /api/admin/payments/balance/:userId
+ * @access  Private/Admin
+ */
+async getUserBalance(req, res) {
+  try {
+    const { userId } = req.params;
+    
+    // Get user from database
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        walletAddress: true,
+        ugdxCredit: true,
+        role: true
+      }
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    if (!user.walletAddress) {
+      return res.json({
+        success: true,
+        data: {
+          user: {
+            id: user.id,
+            email: user.email,
+            role: user.role
+          },
+          walletAddress: null,
+          onChainBalance: '0',
+          offChainBalance: user.ugdxCredit?.toString() || '0',
+          message: 'User has no wallet address'
+        }
+      });
+    }
+    
+    // Query on-chain UGDX balance using ethers v6
+    const { ugdxContract } = require('../config');
+    const balance = await ugdxContract.balanceOf(user.walletAddress);
+    const balanceFormatted = ethers.formatEther(balance);
+    
+    logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔍 ADMIN QUERY: ${user.email} balance check - On-chain: ${balanceFormatted} UGDX, Off-chain: ${user.ugdxCredit || 0}`);
+    
+    res.json({
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role
+        },
+        walletAddress: user.walletAddress,
+        onChainBalance: balanceFormatted,
+        offChainBalance: user.ugdxCredit?.toString() || '0',
+        balanceRaw: balance.toString(),
+        timestamp: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    logger.error('Failed to get user balance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to query user balance',
+      error: error.message
+    });
+  }
+}
+
   /**
    * GET /admin/payments/pending - List all pending mobile money jobs
    */
