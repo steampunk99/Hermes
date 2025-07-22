@@ -32,8 +32,9 @@ class TransactionController {
   async mintUGDX(req, res, next) {
     try {
       const userId = req.user.userId;
-      const { amountUGX } = req.body;
-      if (!amountUGX || amountUGX <= 0) {
+      const { amount } = req.body;  // Changed from amountUGX to amount
+      
+      if (!amount || amount <= 0) {
         return res.status(400).json({ error: "Deposit amount must be greater than 0." });
       }
       // Ensure user exists and has a wallet address to receive UGDX
@@ -42,16 +43,21 @@ class TransactionController {
       if (!user.walletAddress) {
         return res.status(400).json({ error: "No wallet address linked. Please add a crypto wallet address to receive UGDX." });
       }
+      
+      logger.info(`☯️ Creating mobile money job for user: ${user.email} (ID: ${user.id}, Wallet: ${user.walletAddress})`);
       const phone = user.phone;  // use user's own phone for deposit
       // Calculate net UGDX after provider fee
-      const { fee, net } = applyProviderFee(amountUGX);
+      const { fee, net } = applyProviderFee(amount);
       const ugdxToMint = net;  // assuming 1 UGX = 1 UGDX
+      // Determine provider based on phone number or user preference
+      const providerName = phone.startsWith('077') || phone.startsWith('078') ? 'MTN' : 'AIRTEL';
+      
       // Create a MobileMoneyJob entry for collection (deposit)
       const mmJob = await prisma.mobileMoneyJob.create({
         data: {
           userId: userId,
           phone: phone,
-          amountUGX: amountUGX,
+          amount: amount,  // Use parsed amount
           type: "COLLECT",
           provider: providerName,
           status: "PENDING"
@@ -62,28 +68,30 @@ class TransactionController {
         data: {
           userId: userId,
           type: "MINT",
-          amountUGX: amountUGX,
+          amountUGX: amount,  // Use parsed amount
           ugdxAmount: ugdxToMint,
           status: "PENDING",
           mmJobId: mmJob.id
         }
       });
-      // Initiate the mobile money collection via provider API
-      const result = await mmService.requestToPay({
-        amount: amountUGX,
-        phone: phone,
-        trans_id: mmJob.id    // use our MobileMoneyJob ID as reference for callback
-      });
-      if (result.status === 'PENDING') {
-        // Mobile money request initiated; actual confirmation will come via webhook callback
-        logger.info(`Initiated UGX collection of ${amountUGX} via MM for user ${user.email} (Job #${mmJob.id}).`);
-      }
+      // For now, skip Script Networks API call and use manual confirmation
+      // TODO: Re-enable when Script Networks webhooks are ready
+      // const result = await mmService.requestToPay({
+      //   amount: amountUGX,
+      //   phone: phone,
+      //   trans_id: mmJob.id
+      // });
+      
+      logger.info(`Created manual payment request: ${amount} UGX collection for user ${user.email} (Job #${mmJob.id}). Awaiting admin confirmation.`);
       // Respond to client with net UGDX to be minted and transaction info
       return res.status(200).json({
-        message: "Deposit initiated. You will receive UGDX shortly after the payment is confirmed.",
+        message: "Deposit request created. Please send the mobile money payment and contact admin for confirmation.",
+        instructions: `Send ${amount} UGX to the mobile money number provided by admin, then contact support with Job ID: ${mmJob.id}`,
+        jobId: mmJob.id,
         netUGDX: ugdxToMint,
         feeUGX: fee,
-        transactionId: txn.id
+        transactionId: txn.id,
+        status: "PENDING_PAYMENT"
       });
     } catch (err) {
       next(err);
@@ -113,12 +121,15 @@ class TransactionController {
       // Calculate provider fee and net UGX that will be disbursed
       const { fee, net } = applyProviderFee(amountUGDX);
       const ugxToDisburse = net;  // UGX amount to send out (1 UGDX = 1 UGX)
+      // Determine provider based on phone number
+      const providerName = targetPhone.startsWith('077') || targetPhone.startsWith('078') ? 'MTN' : 'AIRTEL';
+      
       // Create a MobileMoneyJob for disbursement (withdrawal)
       const mmJob = await prisma.mobileMoneyJob.create({
         data: {
           userId: userId,
           phone: targetPhone,
-          amountUGX: ugxToDisburse,
+          amount: ugxToDisburse,  // Schema uses 'amount', not 'amountUGX'
           type: "DISBURSE",
           provider: providerName,
           status: "PENDING"
@@ -193,7 +204,15 @@ class TransactionController {
   try {
     const userId = req.user.userId;
     const { amountUGDX, phone, toAddress, signature } = req.body;
-    // ... (validation and user lookup)
+    
+    if (!amountUGDX || amountUGDX <= 0) {
+      return res.status(400).json({ error: "Send amount must be greater than 0." });
+    }
+    
+    // Get user information
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
     if (phone) {
       // User is sending UGX to a phone (mobile money transfer)
       const targetPhone = phone;
@@ -206,11 +225,14 @@ class TransactionController {
       }
       const { fee, net } = applyProviderFee(amountUGDX);
       const ugxToSend = net;
+      // Determine provider based on phone number
+      const providerName = targetPhone.startsWith('077') || targetPhone.startsWith('078') ? 'MTN' : 'AIRTEL';
+      
       // Create MobileMoneyJob and Transaction records (type "SEND")
       const mmJob = await prisma.mobileMoneyJob.create({data: {
         userId,
         phone: targetPhone,
-        amountUGX: ugxToSend,
+        amount: ugxToSend,  // Schema uses 'amount', not 'amountUGX'
         type: "DISBURSE",
         provider: providerName,
         status: "PENDING"

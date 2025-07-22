@@ -2,12 +2,14 @@ const express = require('express');
 const { logger, prisma, JWT_SECRET } = require('./src/config'); 
 const jwt = require('jsonwebtoken');
 const { startOracleRateJob, updateExchangeRate } = require('./src/jobs/oracleRate');
+const { initEventListeners } = require('./src/services/listeners');
 
 const authRoutes = require('./src/routes/auth');
 const userRoutes = require('./src/routes/users');
 const transactionRoutes = require('./src/routes/transactions');
 const webhookRoutes = require('./src/routes/webhook');
 const monitorRoutes = require('./src/routes/monitor'); 
+const securityRoutes = require('./src/routes/security');
 
 const app = express();
 app.use(express.json());  
@@ -45,9 +47,13 @@ app.use('/monitor', monitorRoutes);
 // Protected routes (use authenticateToken middleware)
 app.use('/user', authenticateToken, userRoutes);
 app.use('/transactions', authenticateToken, transactionRoutes);
+app.use('/admin/payments', authenticateToken, require('./src/routes/adminPayments'));
+app.use('/security', authenticateToken, securityRoutes);
 
 // A basic health check endpoint
 app.get('/health', (req, res) => res.status(200).send('OK'));
+
+
 
 // Global error handler (catch-all)
 app.use((err, req, res, next) => {
@@ -62,13 +68,29 @@ app.listen(PORT, () => {
   
   // Start the oracle rate update job
   startOracleRateJob();
+  
+  // Initialize blockchain event listeners
+  initEventListeners();
 });
 
 //db connection check
 prisma.$connect()
-  .then(() => {
+  .then(async () => {
     logger.info("Connected to database successfully.");
-    // Trigger initial oracle rate update
-    updateExchangeRate().catch(err => logger.error("Initial oracle update failed:", err));
+    
+    // Only trigger initial oracle rate update if Bridge is using Oracle pricing
+    try {
+      const { bridgeContract } = require('./src/config');
+      const useOracleForPricing = await bridgeContract.useOracleForPricing();
+      
+      if (useOracleForPricing) {
+        logger.info('Bridge is in Oracle pricing mode, triggering initial rate update');
+        updateExchangeRate().catch(err => logger.error("Initial oracle update failed:", err));
+      } else {
+        logger.info('Bridge is in manual pricing mode, skipping initial Oracle rate update');
+      }
+    } catch (err) {
+      logger.error('Failed to check Bridge pricing mode:', err);
+    }
   })
   .catch(err => logger.error("Database connection failed:", err));
