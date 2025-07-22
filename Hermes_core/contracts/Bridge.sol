@@ -66,6 +66,7 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
     event SwapFeeUpdated(uint256 oldFee, uint256 newFee);
     event EmergencyWithdrawal(address indexed token, uint256 amount, address indexed to);
+    event MobileMoneyMintUGDX(address indexed user, uint256 ugdxAmount, uint256 timestamp);
 
 
     /**
@@ -231,12 +232,29 @@ function unpauseBridge() external onlyOwner {
     _unpause();
 }
 
+/**
+ * @dev Admin mint UGDX for manual mobile money payments
+ * @param to Address to mint UGDX to
+ * @param amount Amount of UGDX to mint (18 decimals)
+ */
+function adminMintUGDX(address to, uint256 amount) external onlyOwner {
+    require(to != address(0), "Bridge: Invalid recipient");
+    require(amount > 0, "Bridge: Invalid amount");
+    
+    // Update tracking
+    totalUGDXMinted += amount;
+    
+    // Mint UGDX to recipient
+    ugdxToken.mint(to, amount);
+    
+    // Emit proper mobile money mint event
+    emit MobileMoneyMintUGDX(to, amount, block.timestamp);
+}
 
-
-   /**
-     * @dev Get current exchange rate from oracle or fallback to manual
-     * @return rate Current UGX per USD rate (18 decimals)
-     */
+/**
+ * @dev Get current exchange rate from oracle or fallback to manual
+ * @return rate Current UGX per USD rate (18 decimals)
+ */
 function _getCurrentExchangeRate() internal view returns (uint256) {
     if (useOracleForPricing) {
        
