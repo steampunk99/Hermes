@@ -32,8 +32,9 @@ class TransactionController {
   async mintUGDX(req, res, next) {
     try {
       const userId = req.user.userId;
-      const { amountUGX } = req.body;
-      if (!amountUGX || amountUGX <= 0) {
+      const { amount } = req.body;  // Changed from amountUGX to amount
+      
+      if (!amount || amount <= 0) {
         return res.status(400).json({ error: "Deposit amount must be greater than 0." });
       }
       // Ensure user exists and has a wallet address to receive UGDX
@@ -42,16 +43,21 @@ class TransactionController {
       if (!user.walletAddress) {
         return res.status(400).json({ error: "No wallet address linked. Please add a crypto wallet address to receive UGDX." });
       }
+      
+      logger.info(`☯️ Creating mobile money job for user: ${user.email} (ID: ${user.id}, Wallet: ${user.walletAddress})`);
       const phone = user.phone;  // use user's own phone for deposit
       // Calculate net UGDX after provider fee
-      const { fee, net } = applyProviderFee(amountUGX);
+      const { fee, net } = applyProviderFee(amount);
       const ugdxToMint = net;  // assuming 1 UGX = 1 UGDX
+      // Determine provider based on phone number or user preference
+      const providerName = phone.startsWith('077') || phone.startsWith('078') ? 'MTN' : 'AIRTEL';
+      
       // Create a MobileMoneyJob entry for collection (deposit)
       const mmJob = await prisma.mobileMoneyJob.create({
         data: {
           userId: userId,
           phone: phone,
-          amountUGX: amountUGX,
+          amount: amount,  // Use parsed amount
           type: "COLLECT",
           provider: providerName,
           status: "PENDING"
@@ -62,28 +68,30 @@ class TransactionController {
         data: {
           userId: userId,
           type: "MINT",
-          amountUGX: amountUGX,
+          amountUGX: amount,  // Use parsed amount
           ugdxAmount: ugdxToMint,
           status: "PENDING",
           mmJobId: mmJob.id
         }
       });
-      // Initiate the mobile money collection via provider API
-      const result = await mmService.requestToPay({
-        amount: amountUGX,
-        phone: phone,
-        trans_id: mmJob.id    // use our MobileMoneyJob ID as reference for callback
-      });
-      if (result.status === 'PENDING') {
-        // Mobile money request initiated; actual confirmation will come via webhook callback
-        logger.info(`Initiated UGX collection of ${amountUGX} via MM for user ${user.email} (Job #${mmJob.id}).`);
-      }
+      // For now, skip Script Networks API call and use manual confirmation
+      // TODO: Re-enable when Script Networks webhooks are ready
+      // const result = await mmService.requestToPay({
+      //   amount: amountUGX,
+      //   phone: phone,
+      //   trans_id: mmJob.id
+      // });
+      
+      logger.info(`Created manual payment request: ${amount} UGX collection for user ${user.email} (Job #${mmJob.id}). Awaiting admin confirmation.`);
       // Respond to client with net UGDX to be minted and transaction info
       return res.status(200).json({
-        message: "Deposit initiated. You will receive UGDX shortly after the payment is confirmed.",
+        message: "Deposit request created. Please send the mobile money payment and contact admin for confirmation.",
+        instructions: `Send ${amount} UGX to the mobile money number provided by admin, then contact support with Job ID: ${mmJob.id}`,
+        jobId: mmJob.id,
         netUGDX: ugdxToMint,
         feeUGX: fee,
-        transactionId: txn.id
+        transactionId: txn.id,
+        status: "PENDING_PAYMENT"
       });
     } catch (err) {
       next(err);
@@ -102,23 +110,28 @@ class TransactionController {
       const targetPhone = phone || (await prisma.user.findUnique({ where: { id: userId } }))?.phone;
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) return res.status(404).json({ error: "User not found" });
-      // If user has a wallet, check on-chain UGDX balance to ensure enough tokens to burn
-      if (user.walletAddress) {
-        const balanceBigInt = await ugdxContract.balanceOf(user.walletAddress);
-        const balanceUGDX = ethers.utils.formatUnits(balanceBigInt, 18);
-        if (parseFloat(balanceUGDX) < amountUGDX) {
-          return res.status(400).json({ error: "Insufficient UGDX balance to redeem that amount." });
-        }
+      
+      // Check off-chain UGDX credit balance (this is what users redeem from)
+      const ugdxCreditBalance = user.ugdxCredit || 0;
+      if (ugdxCreditBalance < amountUGDX) {
+        return res.status(400).json({ 
+          error: "Insufficient UGDX credit balance to redeem that amount.",
+          availableBalance: ugdxCreditBalance,
+          requestedAmount: amountUGDX
+        });
       }
       // Calculate provider fee and net UGX that will be disbursed
       const { fee, net } = applyProviderFee(amountUGDX);
       const ugxToDisburse = net;  // UGX amount to send out (1 UGDX = 1 UGX)
+      // Determine provider based on phone number
+      const providerName = targetPhone.startsWith('077') || targetPhone.startsWith('078') ? 'MTN' : 'AIRTEL';
+      
       // Create a MobileMoneyJob for disbursement (withdrawal)
       const mmJob = await prisma.mobileMoneyJob.create({
         data: {
           userId: userId,
           phone: targetPhone,
-          amountUGX: ugxToDisburse,
+          amount: ugxToDisburse,  // Schema uses 'amount', not 'amountUGX'
           type: "DISBURSE",
           provider: providerName,
           status: "PENDING"
@@ -136,46 +149,98 @@ class TransactionController {
           mmJobId: mmJob.id
         }
       });
-      // If user is not advanced, perform on-chain token burn via meta-transaction
-      if (req.user.role !== 'advanced') {
-        const { signature } = req.body;
-        if (!signature) {
-          return res.status(400).json({ error: "Meta-transaction signature required for gasless withdrawal." });
-        }
-        // Construct call data for Bridge.burnForWithdrawal(amountUGDX)
-        const iface = new ethers.utils.Interface([
-          "function burnForWithdrawal(uint256 amount) public"
-        ]);
-        const data = iface.encodeFunctionData("burnForWithdrawal", [
-          ethers.utils.parseUnits(amountUGDX.toString(), 18)
-        ]);
-        // Get current nonce for user in Forwarder and execute meta-tx via relayer
-        const nonce = await forwarderContract.getNonce(user.walletAddress);
+      // For secure mobile money redemptions, handle burns based on user role
+      // USER: Backend handles burn automatically via relayer
+      // ADVANCED: Users handle their own on-chain burns
+      
+      if (req.user.role === 'USER') {
+        // Normal users: Backend handles burn automatically via relayer
+        logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔄 AUTO BURN: Processing automatic burn for user ${user.email}`);
+        
         try {
-          const tx = await forwarderContract.execute(bridgeContract.address, data, user.walletAddress, nonce, signature);
-          const receipt = await tx.wait();
-          logger.info(`UGDX burn meta-tx sent by relayer, txHash: ${receipt.transactionHash}`);
-          // Link on-chain tx hash to our Transaction record
+          // First, check user's on-chain UGDX balance
+          const userBalance = await ugdxContract.balanceOf(user.walletAddress);
+          const userBalanceFormatted = ethers.formatUnits(userBalance, 18);
+          
+          logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔍 BALANCE CHECK: User ${user.email} has ${userBalanceFormatted} UGDX on-chain`);
+          
+          if (parseFloat(userBalanceFormatted) < amountUGDX) {
+            logger.error(`[${new Date().toISOString().slice(11, 23)}] ❌ INSUFFICIENT BALANCE: User has ${userBalanceFormatted} UGDX but trying to burn ${amountUGDX}`);
+            return res.status(400).json({ 
+              error: "Insufficient on-chain UGDX balance",
+              message: `You have ${userBalanceFormatted} UGDX on-chain but need ${amountUGDX} for withdrawal.`,
+              balance: userBalanceFormatted,
+              required: amountUGDX
+            });
+          }
+          
+          // Method 1: Try direct burn (if relayer has permission)
+          logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔥 ATTEMPTING BURN: ${amountUGDX} UGDX from ${user.walletAddress}`);
+          
+          // Use burnFrom to burn user's tokens (relayer needs allowance or special permission)
+          const burnAmount = ethers.parseUnits(amountUGDX.toString(), 18);
+          const burnTx = await ugdxContract.connect(relayer).burnFrom(
+            user.walletAddress,
+            burnAmount
+          );
+          const receipt = await burnTx.wait();
+          
+          logger.info(`[${new Date().toISOString().slice(11, 23)}] ✅ AUTO BURN SUCCESS: Burned ${amountUGDX} UGDX from ${user.walletAddress} (${receipt.transactionHash})`);
+          
+          // Update transaction with burn hash
           await prisma.transaction.update({
             where: { id: txn.id },
-            data: { txHash: receipt.transactionHash }
+            data: { 
+              txHash: receipt.transactionHash,
+              status: "COMPLETED"
+            }
           });
-          // Deduct gas credit for this meta-transaction
-          await deductGasCredit(user, tx, receipt, `Redeem tx ${receipt.transactionHash}`);
+          
         } catch (err) {
-          logger.error("Meta-transaction execution failed:", err);
-          return res.status(500).json({ error: "Failed to execute token burn transaction." });
+          logger.error(`[${new Date().toISOString().slice(11, 23)}] ❌ AUTO BURN FAILED:`, {
+            error: err.message,
+            code: err.code,
+            reason: err.reason,
+            userWallet: user.walletAddress,
+            burnAmount: amountUGDX
+          });
+          
+          return res.status(500).json({ 
+            error: "Failed to process token burn",
+            message: "Unable to burn UGDX tokens for withdrawal. This may be due to insufficient allowance or balance.",
+            details: err.reason || err.message
+          });
         }
-      } else {
-        // Advanced user: expected to perform the burn on-chain themselves (no gas credit deduction)
-        logger.info(`Advanced user ${user.email} initiated a withdrawal; awaiting on-chain burn confirmation.`);
+        
+      } else if (req.user.role === 'ADVANCED') {
+        // Advanced users: Expected to burn tokens themselves on-chain
+        logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔧 ADVANCED USER: ${user.email} expected to handle burn independently`);
+        
+        // Just update the transaction status - advanced users handle burns themselves
+        await prisma.transaction.update({
+          where: { id: txn.id },
+          data: { status: "PENDING_BURN" }
+        });
+        
       }
+      
+      // Deduct from ugdxCredit balance (for tracking purposes)
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          ugdxCredit: {
+            decrement: amountUGDX
+          }
+        }
+      });
+      
       // Initiate the mobile money payout via provider API
       await mmService.requestWithdrawal({
         amount: ugxToDisburse,
         phone: targetPhone,
         trans_id: mmJob.id   // reference our MobileMoneyJob ID for callback tracking
       });
+      
       // Respond to client with the expected UGX disbursement and transaction reference
       return res.status(200).json({
         message: "Withdrawal initiated. UGX will be sent to the target mobile money account shortly.",
@@ -193,7 +258,15 @@ class TransactionController {
   try {
     const userId = req.user.userId;
     const { amountUGDX, phone, toAddress, signature } = req.body;
-    // ... (validation and user lookup)
+    
+    if (!amountUGDX || amountUGDX <= 0) {
+      return res.status(400).json({ error: "Send amount must be greater than 0." });
+    }
+    
+    // Get user information
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
     if (phone) {
       // User is sending UGX to a phone (mobile money transfer)
       const targetPhone = phone;
@@ -206,11 +279,14 @@ class TransactionController {
       }
       const { fee, net } = applyProviderFee(amountUGDX);
       const ugxToSend = net;
+      // Determine provider based on phone number
+      const providerName = targetPhone.startsWith('077') || targetPhone.startsWith('078') ? 'MTN' : 'AIRTEL';
+      
       // Create MobileMoneyJob and Transaction records (type "SEND")
       const mmJob = await prisma.mobileMoneyJob.create({data: {
         userId,
         phone: targetPhone,
-        amountUGX: ugxToSend,
+        amount: ugxToSend,  // Schema uses 'amount', not 'amountUGX'
         type: "DISBURSE",
         provider: providerName,
         status: "PENDING"

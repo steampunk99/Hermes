@@ -9,6 +9,7 @@ router.get('/reserves/status', monitor.getReservesStatus);
 router.post('/oracle/update-rate', monitor.triggerUpdateRate);
 router.get('/oracle/health', monitor.getOracleHealth);
 // Enable or disable oracle pricing mode
-router.post('/oracle/enable', monitor.setOracleMode);
+router.post('/oracle/on', monitor.setOracleMode);
+router.post('/oracle/off', monitor.disableOracleMode);
 
 module.exports = router;

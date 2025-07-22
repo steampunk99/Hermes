@@ -22,6 +22,15 @@ function startOracleRateJob() {
  */
 async function updateExchangeRate() {
   try {
+    // First check if Bridge is using Oracle pricing mode
+    const { bridgeContract } = require('../config');
+    const useOracleForPricing = await bridgeContract.useOracleForPricing();
+    
+    if (!useOracleForPricing) {
+      logger.debug('Bridge is in manual pricing mode, skipping Oracle rate update');
+      return;
+    }
+    
     // Check if enough time has passed since last update
     const [, lastUpdateTime] = await oracleContract.getLatestPrice();
     const now = Math.floor(Date.now() / 1000);
@@ -75,10 +84,34 @@ async function updateExchangeRate() {
       }
     }
 
+    // Check if relayer is authorized before updating
+    const relayerAddress = await oracleContract.runner.address;
+    const isAuthorized = await oracleContract.isAuthorizedUpdater(relayerAddress);
+    logger.info(`Relayer address: ${relayerAddress}`);
+    logger.info(`Is relayer authorized: ${isAuthorized}`);
+    
+    if (!isAuthorized) {
+      logger.error(`Relayer ${relayerAddress} is not authorized to update Oracle. Please authorize this address first.`);
+      return;
+    }
+
     // Update price on-chain via Oracle contract
+    logger.info(`Calling updatePrice with rate: ${rateFloat} (${newRate.toString()})`);
     const tx = await oracleContract.updatePrice(newRate);
-    await tx.wait();
+    const receipt = await tx.wait();
     logger.info(`Oracle contract updatePrice called (tx: ${tx.hash}), new rate = ${rateFloat} UGX/USD`);
+    
+    // Log transaction receipt to see if events were emitted
+    logger.info(`Transaction receipt:`, {
+      status: receipt.status,
+      gasUsed: receipt.gasUsed.toString(),
+      logs: receipt.logs.length,
+      events: receipt.logs.map(log => ({
+        address: log.address,
+        topics: log.topics,
+        data: log.data
+      }))
+    });
 
     // Update local cache in DB
     await prisma.oraclePrice.upsert({

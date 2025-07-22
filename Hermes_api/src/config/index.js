@@ -21,8 +21,11 @@ const logger = winston.createLogger({
 const JWT_SECRET = process.env.JWT_SECRET;
 const PROVIDER_FEE_BPS = parseInt(process.env.PROVIDER_FEE_BPS || "50"); // e.g., 0.5% fee
 
-// Configure Ethers provider (connect to Ethereum/Polygon network)
+// Configure Ethers providers (connect to Ethereum/Polygon network)
+// HTTP provider for regular transactions
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+// WebSocket provider for event listening (if WS URL is provided)
+const wsProvider = process.env.RPC_WS_URL ? new ethers.WebSocketProvider(process.env.RPC_WS_URL) : null;
 // Create a signer from relayer private key (this account pays gas for meta-tx)
 const relayer = new ethers.Wallet(process.env.RELAYER_PRIVATE_KEY, provider);
 
@@ -39,6 +42,9 @@ const BRIDGE_ABI = [
   "function burnForWithdrawal(uint256 amount) external",          
   "function SwapUSDTForUGDX(uint256 usdtAmount) external",        
   
+  // Admin functions
+  "function adminMintUGDX(address to, uint256 amount) external",
+  
   // View functions
   "function ugxPerUSD() view returns(uint256)",                 
   "function useOracleForPricing() view returns(bool)",
@@ -51,7 +57,11 @@ const BRIDGE_ABI = [
   
   // Events
   "event PricingModeChanged(bool useOracle)",
-  "event OracleUpdated(address indexed oldOracle, address indexed newOracle)"
+  "event OracleUpdated(address indexed oldOracle, address indexed newOracle)",
+  "event MobileMoneyMintUGDX(address indexed user, uint256 ugdxAmount, uint256 timestamp)",
+  "event UGDXBurnedForWithdrawal(address indexed user, uint256 ugdxAmount, uint256 timestamp)",
+  "event FeeCollected(address indexed from, uint256 amount, string feeType)",
+  "event USDTSwappedForUGDX(address indexed user, uint256 usdtAmount, uint256 ugdxAmount, uint256 feeAmount, uint256 exchangeRate)"
 ];
 const FORWARDER_ABI = [
   // Minimal Forwarder ABI (OpenZeppelin ERC2771 minimal forwarder functions)
@@ -80,6 +90,7 @@ module.exports = {
   logger,
   JWT_SECRET,
   provider,
+  wsProvider,
   relayer,
   ugdxContract,
   bridgeContract,

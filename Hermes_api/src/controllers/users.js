@@ -1,5 +1,6 @@
     // src/controllers/userController.js
-const { prisma, ugdxContract } = require('../config');
+const { prisma, ugdxContract, logger } = require('../config');
+const { ethers } = require('ethers');
 
 class UserController {
 
@@ -38,10 +39,10 @@ async getProfile (req, res, next)  {
         try {
           const balanceBigInt = await ugdxContract.balanceOf(user.walletAddress);
           // Convert from Wei (assuming UGDX has 18 decimals) to a human-readable number
-          ugdxBalance = parseFloat(ethers.utils.formatUnits(balanceBigInt, 18));
+          ugdxBalance = parseFloat(ethers.formatEther(balanceBigInt));
         } catch (chainErr) {
           // If on-chain call fails, log error and default balance to 0
-          logger.error("Error fetching on-chain balance:", chainErr);
+          logger.error(`[${new Date().toISOString().slice(11, 23)}] ❌ Error fetching on-chain balance for ${user.walletAddress}:`, chainErr);
         }
       }
       return res.json({
@@ -59,7 +60,7 @@ async getProfile (req, res, next)  {
     try {
       const userId = req.user.userId;
       const { walletAddress } = req.body;
-      if (!walletAddress || !ethers.utils.isAddress(walletAddress)) {
+      if (!walletAddress || !ethers.isAddress(walletAddress)) {
         return res.status(400).json({ error: "A valid wallet address is required." });
       }
       // Update the user's wallet address (for advanced users linking an external wallet)

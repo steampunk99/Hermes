@@ -19,10 +19,20 @@ model User {
   kycVerified   Boolean  @default(false)               // Whether KYC (email) is verified
   otpCode       String?                               // One-time 6-digit OTP code for verification
   otpExpiresAt  DateTime?                             // OTP expiry timestamp
-  walletAddress String?                               // Linked crypto wallet address (if provided)
+  walletAddress String?  @unique                      // Linked crypto wallet address (if provided)
   role          Role        // Role: "user" (default), "advanced", or "admin"
   gasCredit     Decimal  @default(0)                  // Gas credit (in UGX) for meta-transactions
   ugxCredit     Decimal  @default(0)                  // Off-chain UGX credit (if any)
+  ugdxCredit    Decimal  @default(0)                  // Off-chain UGDX balance tracking
+  
+  // Security fields
+  isLocked      Boolean  @default(false)               // Account locked due to security violations
+  lockedUntil   DateTime?                             // When the account lock expires
+  securityFlags String?                               // JSON string of security flags/reasons
+  violationCount Int     @default(0)                  // Total number of security violations
+  lastViolation DateTime?                             // Timestamp of last security violation
+  riskLevel     String   @default("LOW")              // Risk level: LOW, MEDIUM, HIGH, CRITICAL
+  
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -30,6 +40,8 @@ model User {
   transactions Transaction[]    // Transactions made by user
   mmJobs       MobileMoneyJob[] // Mobile money jobs initiated by user
   gasDrips     GasDrip[]        // Gas credit usage or top-up records
+  securityViolations SecurityViolation[] // Security violations by this user
+  feeCollections FeeCollection[] // Fees paid by this user
 }
 
 // Transaction model: records mint, redeem, and send transactions for history
@@ -101,4 +113,76 @@ enum Role {
   USER
   HYPERADMIN
   ADVANCED
+}
+
+// ProcessedEvent model: tracks blockchain events to prevent duplicates and enable replay
+model ProcessedEvent {
+  id          Int      @id @default(autoincrement())
+  txHash      String                               // Transaction hash
+  eventName   String                               // Event name (e.g., "PriceUpdated", "USDTSwappedForUGDX")
+  blockNumber Int                                  // Block number for ordering
+  logIndex    Int                                  // Log index within the transaction
+  contractAddress String                           // Contract that emitted the event
+  processed   Boolean  @default(false)             // Whether event has been processed
+  processedAt DateTime?                            // When event was processed
+  createdAt   DateTime @default(now())
+  
+  @@unique([txHash, logIndex])                     // Prevent duplicate processing
+  @@index([blockNumber])                           // For efficient block scanning
+  @@index([eventName])                             // For event type queries
+}
+
+// EventProcessingState model: tracks last processed block for each contract
+model EventProcessingState {
+  id              Int      @id @default(autoincrement())
+  contractAddress String   @unique                  // Contract address
+  contractName    String                            // Human-readable name (e.g., "Bridge", "Oracle")
+  lastProcessedBlock Int   @default(0)              // Last block number processed
+  updatedAt       DateTime @updatedAt
+}
+
+// SecurityViolation model: tracks all security violations and enforcement actions
+model SecurityViolation {
+  id              Int      @id @default(autoincrement())
+  user            User     @relation(fields: [userId], references: [id])
+  userId          String
+  violationType   String                               // Type of violation (e.g., "RATE_LIMIT", "SUSPICIOUS_PATTERN", "COOLDOWN")
+  endpoint        String                               // Endpoint that was accessed
+  severity        String                               // Severity level: "LOW", "MEDIUM", "HIGH", "CRITICAL"
+  description     String                               // Detailed description of the violation
+  ipAddress       String?                              // IP address of the violator
+  userAgent       String?                              // User agent string
+  metadata        String?                              // JSON string with additional violation data
+  actionTaken     String?                              // Action taken (e.g., "FLAGGED", "LOCKED", "WARNING")
+  lockDuration    Int?                                 // Duration of lock in hours (if applicable)
+  resolvedBy      String?                              // Admin who resolved/unflagged (if applicable)
+  resolvedAt      DateTime?                            // When violation was resolved
+  createdAt       DateTime @default(now())
+  
+  @@index([userId])                                    // For user violation queries
+  @@index([violationType])                             // For violation type analysis
+  @@index([severity])                                  // For severity-based queries
+  @@index([createdAt])                                 // For time-based analysis
+}
+
+// Fee collection tracking model for HyperAdmin reconciliation
+model FeeCollection {
+  id            String   @id @default(cuid())
+  userId        String                                // User who paid the fee
+  feeType       String                                // "swap" or "burn"
+  feeAmount     Decimal                               // Fee amount in UGDX
+  originalAmount Decimal                              // Original transaction amount
+  txHash        String   @unique                     // On-chain transaction hash
+  blockNumber   Int                                   // Block number for verification
+  feeRecipient  String                               // Address that received the fee
+  createdAt     DateTime @default(now())
+  processedAt   DateTime @updatedAt
+  
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+  
+  @@index([userId])                                   // For user fee queries
+  @@index([feeType])                                  // For fee type analysis
+  @@index([txHash])                                   // For transaction lookup
+  @@index([createdAt])                                // For time-based analysis
 }
