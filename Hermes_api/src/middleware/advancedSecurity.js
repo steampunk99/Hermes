@@ -11,6 +11,39 @@ const {
   logSecurityEvent
 } = require('../services/securityService');
 
+// Authentication Middleware
+const requireAuth = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  next();
+};
+
+// Admin Role Checker
+const requireRole = (roles = []) => {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { role: true }
+      });
+
+      if (!user || !roles.includes(user.role)) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+
+      next();
+    } catch (error) {
+      logger.error('Role check error:', error);
+      res.status(500).json({ error: 'Server error during authorization' });
+    }
+  };
+};
+
 // Security tracking store (in production, use Redis)
 const securityStore = new Map();
 
@@ -427,14 +460,22 @@ const getSecurityStatus = (req, res) => {
 };
 
 module.exports = {
+  // Authentication
+  requireAuth,
+  requireRole,
+  
+  // Security middleware
   adminSecurity,
   financeSecurity,
   standardSecurity,
-  suspiciousPatternDetection,
-  createCooldownMiddleware,
-  createAdvancedRateLimit,
-  createProgressiveSlowDown,
   getSecurityStatus,
+  trackSuspiciousActivity,
   flagUser,
-  checkUserFlag
+  createAdvancedRateLimit,
+  createCooldownMiddleware,
+  suspiciousPatternDetection,
+  createProgressiveSlowDown,
+  
+  // Utils
+  securityStore
 };

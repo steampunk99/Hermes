@@ -110,13 +110,15 @@ class TransactionController {
       const targetPhone = phone || (await prisma.user.findUnique({ where: { id: userId } }))?.phone;
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) return res.status(404).json({ error: "User not found" });
-      // If user has a wallet, check on-chain UGDX balance to ensure enough tokens to burn
-      if (user.walletAddress) {
-        const balanceBigInt = await ugdxContract.balanceOf(user.walletAddress);
-        const balanceUGDX = ethers.utils.formatUnits(balanceBigInt, 18);
-        if (parseFloat(balanceUGDX) < amountUGDX) {
-          return res.status(400).json({ error: "Insufficient UGDX balance to redeem that amount." });
-        }
+      
+      // Check off-chain UGDX credit balance (this is what users redeem from)
+      const ugdxCreditBalance = user.ugdxCredit || 0;
+      if (ugdxCreditBalance < amountUGDX) {
+        return res.status(400).json({ 
+          error: "Insufficient UGDX credit balance to redeem that amount.",
+          availableBalance: ugdxCreditBalance,
+          requestedAmount: amountUGDX
+        });
       }
       // Calculate provider fee and net UGX that will be disbursed
       const { fee, net } = applyProviderFee(amountUGDX);
@@ -147,46 +149,98 @@ class TransactionController {
           mmJobId: mmJob.id
         }
       });
-      // If user is not advanced, perform on-chain token burn via meta-transaction
-      if (req.user.role !== 'advanced') {
-        const { signature } = req.body;
-        if (!signature) {
-          return res.status(400).json({ error: "Meta-transaction signature required for gasless withdrawal." });
-        }
-        // Construct call data for Bridge.burnForWithdrawal(amountUGDX)
-        const iface = new ethers.utils.Interface([
-          "function burnForWithdrawal(uint256 amount) public"
-        ]);
-        const data = iface.encodeFunctionData("burnForWithdrawal", [
-          ethers.utils.parseUnits(amountUGDX.toString(), 18)
-        ]);
-        // Get current nonce for user in Forwarder and execute meta-tx via relayer
-        const nonce = await forwarderContract.getNonce(user.walletAddress);
+      // For secure mobile money redemptions, handle burns based on user role
+      // USER: Backend handles burn automatically via relayer
+      // ADVANCED: Users handle their own on-chain burns
+      
+      if (req.user.role === 'USER') {
+        // Normal users: Backend handles burn automatically via relayer
+        logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔄 AUTO BURN: Processing automatic burn for user ${user.email}`);
+        
         try {
-          const tx = await forwarderContract.execute(bridgeContract.address, data, user.walletAddress, nonce, signature);
-          const receipt = await tx.wait();
-          logger.info(`UGDX burn meta-tx sent by relayer, txHash: ${receipt.transactionHash}`);
-          // Link on-chain tx hash to our Transaction record
+          // First, check user's on-chain UGDX balance
+          const userBalance = await ugdxContract.balanceOf(user.walletAddress);
+          const userBalanceFormatted = ethers.formatUnits(userBalance, 18);
+          
+          logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔍 BALANCE CHECK: User ${user.email} has ${userBalanceFormatted} UGDX on-chain`);
+          
+          if (parseFloat(userBalanceFormatted) < amountUGDX) {
+            logger.error(`[${new Date().toISOString().slice(11, 23)}] ❌ INSUFFICIENT BALANCE: User has ${userBalanceFormatted} UGDX but trying to burn ${amountUGDX}`);
+            return res.status(400).json({ 
+              error: "Insufficient on-chain UGDX balance",
+              message: `You have ${userBalanceFormatted} UGDX on-chain but need ${amountUGDX} for withdrawal.`,
+              balance: userBalanceFormatted,
+              required: amountUGDX
+            });
+          }
+          
+          // Method 1: Try direct burn (if relayer has permission)
+          logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔥 ATTEMPTING BURN: ${amountUGDX} UGDX from ${user.walletAddress}`);
+          
+          // Use burnFrom to burn user's tokens (relayer needs allowance or special permission)
+          const burnAmount = ethers.parseUnits(amountUGDX.toString(), 18);
+          const burnTx = await ugdxContract.connect(relayer).burnFrom(
+            user.walletAddress,
+            burnAmount
+          );
+          const receipt = await burnTx.wait();
+          
+          logger.info(`[${new Date().toISOString().slice(11, 23)}] ✅ AUTO BURN SUCCESS: Burned ${amountUGDX} UGDX from ${user.walletAddress} (${receipt.transactionHash})`);
+          
+          // Update transaction with burn hash
           await prisma.transaction.update({
             where: { id: txn.id },
-            data: { txHash: receipt.transactionHash }
+            data: { 
+              txHash: receipt.transactionHash,
+              status: "COMPLETED"
+            }
           });
-          // Deduct gas credit for this meta-transaction
-          await deductGasCredit(user, tx, receipt, `Redeem tx ${receipt.transactionHash}`);
+          
         } catch (err) {
-          logger.error("Meta-transaction execution failed:", err);
-          return res.status(500).json({ error: "Failed to execute token burn transaction." });
+          logger.error(`[${new Date().toISOString().slice(11, 23)}] ❌ AUTO BURN FAILED:`, {
+            error: err.message,
+            code: err.code,
+            reason: err.reason,
+            userWallet: user.walletAddress,
+            burnAmount: amountUGDX
+          });
+          
+          return res.status(500).json({ 
+            error: "Failed to process token burn",
+            message: "Unable to burn UGDX tokens for withdrawal. This may be due to insufficient allowance or balance.",
+            details: err.reason || err.message
+          });
         }
-      } else {
-        // Advanced user: expected to perform the burn on-chain themselves (no gas credit deduction)
-        logger.info(`Advanced user ${user.email} initiated a withdrawal; awaiting on-chain burn confirmation.`);
+        
+      } else if (req.user.role === 'ADVANCED') {
+        // Advanced users: Expected to burn tokens themselves on-chain
+        logger.info(`[${new Date().toISOString().slice(11, 23)}] 🔧 ADVANCED USER: ${user.email} expected to handle burn independently`);
+        
+        // Just update the transaction status - advanced users handle burns themselves
+        await prisma.transaction.update({
+          where: { id: txn.id },
+          data: { status: "PENDING_BURN" }
+        });
+        
       }
+      
+      // Deduct from ugdxCredit balance (for tracking purposes)
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          ugdxCredit: {
+            decrement: amountUGDX
+          }
+        }
+      });
+      
       // Initiate the mobile money payout via provider API
       await mmService.requestWithdrawal({
         amount: ugxToDisburse,
         phone: targetPhone,
         trans_id: mmJob.id   // reference our MobileMoneyJob ID for callback tracking
       });
+      
       // Respond to client with the expected UGX disbursement and transaction reference
       return res.status(200).json({
         message: "Withdrawal initiated. UGX will be sent to the target mobile money account shortly.",

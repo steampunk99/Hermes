@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const adminPayments = require('../controllers/adminPayments');
-const { adminSecurity } = require('../middleware/advancedSecurity');
+
 
 // Admin authentication middleware (requires HYPERADMIN role)
 const requireAdmin = (req, res, next) => {
@@ -12,6 +12,19 @@ const requireAdmin = (req, res, next) => {
   }
   next();
 };
+
+const { 
+  adminSecurity, 
+  requireAuth, 
+  requireRole 
+} = require('../middleware/advancedSecurity');
+
+// Apply authentication and admin role check to all routes
+router.use(requireAuth);
+router.use(requireRole(['ADMIN', 'HYPERADMIN']));
+
+
+
 
 // Apply admin middleware to all routes
 router.use(requireAdmin);
@@ -28,4 +41,15 @@ router.post('/reject', ...adminSecurity('admin-payments-reject'), adminPayments.
 // GET /admin/payments/history - Get payment history with filters
 router.get('/history', ...adminSecurity('admin-payments-history'), adminPayments.getPaymentHistory);
 
+// GET /admin/payments/treasury - Get onchain treasury overview and fee collections
+router.get('/treasury', 
+  ...adminSecurity('admin-payments-treasury'), 
+  adminPayments.getTreasuryOverview
+);
+
+// GET /admin/payments/balance/:userId - Get user's on-chain UGDX balance
+router.get('/balance/:userId',
+  ...adminSecurity('admin-payments-balance'),
+  adminPayments.getUserBalance
+);
 module.exports = router;
