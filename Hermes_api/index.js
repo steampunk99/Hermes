@@ -48,7 +48,7 @@ app.use('/monitor', monitorRoutes);
 app.use('/user', authenticateToken, userRoutes);
 app.use('/transactions', authenticateToken, transactionRoutes);
 // Admin routes
-app.use('/admin/payments', authenticateToken, require('./src/routes/adminPayments'));
+app.use('/admin/finance', authenticateToken, require('./src/routes/adminFinance'));
 app.use('/security', authenticateToken, securityRoutes);
 
 // A basic health check endpoint
