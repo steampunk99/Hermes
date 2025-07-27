@@ -8,67 +8,66 @@ generator client {
   provider = "prisma-client-js"
 }
 
-
-
 // User model: stores basic user info and KYC/verification status
 model User {
-  id            String   @id @default(uuid())           // Unique user ID (UUID)
-  phone         String   @unique                       // Phone number (unique)
-  email         String   @unique                       // Email address (unique)
-  passwordHash  String                                // Hashed password
-  kycVerified   Boolean  @default(false)               // Whether KYC (email) is verified
-  otpCode       String?                               // One-time 6-digit OTP code for verification
-  otpExpiresAt  DateTime?                             // OTP expiry timestamp
-  walletAddress String?  @unique                      // Linked crypto wallet address (if provided)
-  role          Role        // Role: "user" (default), "advanced", or "admin"
-  gasCredit     Decimal  @default(0)                  // Gas credit (in UGX) for meta-transactions
-  ugxCredit     Decimal  @default(0)                  // Off-chain UGX credit (if any)
-  ugdxCredit    Decimal  @default(0)                  // Off-chain UGDX balance tracking
-  
+  id            String    @id @default(uuid()) // Unique user ID (UUID)
+  phone         String    @unique // Phone number (unique)
+  email         String    @unique // Email address (unique)
+  passwordHash  String // Hashed password
+  kycVerified   Boolean   @default(false) // Whether KYC (email) is verified
+  otpCode       String? // One-time 6-digit OTP code for verification
+  otpExpiresAt  DateTime? // OTP expiry timestamp
+  walletAddress String?   @unique // Linked crypto wallet address (if provided)
+  sensei        String? @db.Text // Encrypted private key for wallet (never stored in plain text)
+  role          Role // Role: "user" (default), "advanced", or "admin"
+  gasCredit     Decimal   @default(0) // Gas credit (in UGX) for meta-transactions
+  ugxCredit     Decimal   @default(0) // Off-chain UGX credit (if any)
+  ugdxCredit    Decimal   @default(0) // Off-chain UGDX balance tracking
+
   // Security fields
-  isLocked      Boolean  @default(false)               // Account locked due to security violations
-  lockedUntil   DateTime?                             // When the account lock expires
-  securityFlags String?                               // JSON string of security flags/reasons
-  violationCount Int     @default(0)                  // Total number of security violations
-  lastViolation DateTime?                             // Timestamp of last security violation
-  riskLevel     String   @default("LOW")              // Risk level: LOW, MEDIUM, HIGH, CRITICAL
-  
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isLocked       Boolean   @default(false) // Account locked due to security violations
+  lockedUntil    DateTime? // When the account lock expires
+  securityFlags  String? // JSON string of security flags/reasons
+  violationCount Int       @default(0) // Total number of security violations
+  lastViolation  DateTime? // Timestamp of last security violation
+  riskLevel      String    @default("LOW") // Risk level: LOW, MEDIUM, HIGH, CRITICAL
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations:
-  transactions Transaction[]    // Transactions made by user
-  mmJobs       MobileMoneyJob[] // Mobile money jobs initiated by user
-  gasDrips     GasDrip[]        // Gas credit usage or top-up records
+  transactions       Transaction[] // Transactions made by user
+  mmJobs             MobileMoneyJob[] // Mobile money jobs initiated by user
+  gasDrips           GasDrip[] // Gas credit usage or top-up records
   securityViolations SecurityViolation[] // Security violations by this user
-  feeCollections FeeCollection[] // Fees paid by this user
+  feeCollections     FeeCollection[] // Fees paid by this user
+  p2pTransactions    P2PTransaction[] // P2P transfers sent by this user
 }
 
 // Transaction model: records mint, redeem, and send transactions for history
 model Transaction {
-  id         Int       @id @default(autoincrement())
-  user       User      @relation(fields: [userId], references: [id])
+  id         Int             @id @default(autoincrement())
+  user       User            @relation(fields: [userId], references: [id])
   userId     String
-  type       TransactionType    // "MINT", "REDEEM", or "SEND"
-  amountUGX  Decimal            // Amount in UGX involved
-  ugdxAmount Decimal            // UGDX token amount (pegged 1:1 to UGX)
-  toAddress  String?            // For SEND: target blockchain address (if on-chain transfer)
-  toPhone    String?            // For SEND: target phone number (if sending to mobile money)
-  txHash     String?            // Transaction hash for on-chain operations (if available)
-  status     String   @default("PENDING")   // "PENDING", "COMPLETED", "FAILED"
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  type       TransactionType // "MINT", "REDEEM", or "SEND"
+  amountUGX  Decimal // Amount in UGX involved
+  ugdxAmount Decimal // UGDX token amount (pegged 1:1 to UGX)
+  toAddress  String? // For SEND: target blockchain address (if on-chain transfer)
+  toPhone    String? // For SEND: target phone number (if sending to mobile money)
+  txHash     String? // Transaction hash for on-chain operations (if available)
+  status     String          @default("PENDING") // "PENDING", "COMPLETED", "FAILED"
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
 
-  mmJob    MobileMoneyJob?  @relation(fields: [mmJobId], references: [id])
-  mmJobId  Int? @unique
+  mmJob   MobileMoneyJob? @relation(fields: [mmJobId], references: [id])
+  mmJobId Int?            @unique
 }
 
 model OraclePrice {
   id          Int      @id @default(1)
-  currentRate Decimal   // latest UGX per USD rate
-  lastUpdated DateTime  // timestamp of last price update
+  currentRate Decimal // latest UGX per USD rate
+  lastUpdated DateTime // timestamp of last price update
 }
-
 
 enum TransactionType {
   MINT
@@ -78,24 +77,25 @@ enum TransactionType {
 
 // MobileMoneyJob model: tracks interactions with the MM provider for deposits/withdrawals
 model MobileMoneyJob {
-  id        Int      @id @default(autoincrement())
-  user      User     @relation(fields: [userId], references: [id])
+  id        Int       @id @default(autoincrement())
+  user      User      @relation(fields: [userId], references: [id])
   userId    String
-  phone     String                              // Phone number for the MM transaction
-  amount Decimal                             // Amount in UGX to collect or disburse
-  type      MMJobType                           // "COLLECT" (deposit) or "DISBURSE" (withdrawal)
-  provider  String                              // Provider used ("MTN" or "AIRTEL")
-  trans_id  String?                             // Provider's transaction ID or reference (after completion)
-  status    String   @default("PENDING")        // "PENDING", "SUCCESS", "FAIL"
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  phone     String // Phone number for the MM transaction
+  amount    Decimal // Amount in UGX to collect or disburse
+  type      MMJobType // "COLLECT" (deposit) or "DISBURSE" (withdrawal)
+  provider  String // Provider used ("MTN" or "AIRTEL")
+  trans_id  String? // Provider's transaction ID or reference (after completion)
+  status    String    @default("PENDING") // "PENDING", "SUCCESS", "FAIL"
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
-  transaction Transaction?
+  transaction    Transaction?
+  P2PTransaction P2PTransaction[]
 }
 
 enum MMJobType {
-  COLLECT    // Collect money from user (deposit)
-  DISBURSE   // Disburse money to user (withdrawal)
+  COLLECT // Collect money from user (deposit)
+  DISBURSE // Disburse money to user (withdrawal)
 }
 
 // GasDrip model: logs gas credit allocations and usage per user (for meta-transactions)
@@ -103,9 +103,9 @@ model GasDrip {
   id        Int      @id @default(autoincrement())
   user      User     @relation(fields: [userId], references: [id])
   userId    String
-  amount    Decimal                           // Amount of gas credit given or used (in UGX value)
-  type      String                            // "DRIP" for credit given, "USE" for usage
-  note      String?                           // Description or tx reference for context
+  amount    Decimal // Amount of gas credit given or used (in UGX value)
+  type      String // "DRIP" for credit given, "USE" for usage
+  note      String? // Description or tx reference for context
   createdAt DateTime @default(now())
 }
 
@@ -117,72 +117,124 @@ enum Role {
 
 // ProcessedEvent model: tracks blockchain events to prevent duplicates and enable replay
 model ProcessedEvent {
-  id          Int      @id @default(autoincrement())
-  txHash      String                               // Transaction hash
-  eventName   String                               // Event name (e.g., "PriceUpdated", "USDTSwappedForUGDX")
-  blockNumber Int                                  // Block number for ordering
-  logIndex    Int                                  // Log index within the transaction
-  contractAddress String                           // Contract that emitted the event
-  processed   Boolean  @default(false)             // Whether event has been processed
-  processedAt DateTime?                            // When event was processed
-  createdAt   DateTime @default(now())
-  
-  @@unique([txHash, logIndex])                     // Prevent duplicate processing
-  @@index([blockNumber])                           // For efficient block scanning
-  @@index([eventName])                             // For event type queries
+  id              Int       @id @default(autoincrement())
+  txHash          String // Transaction hash
+  eventName       String // Event name (e.g., "PriceUpdated", "USDTSwappedForUGDX")
+  blockNumber     Int // Block number for ordering
+  logIndex        Int // Log index within the transaction
+  contractAddress String // Contract that emitted the event
+  processed       Boolean   @default(false) // Whether event has been processed
+  processedAt     DateTime? // When event was processed
+  createdAt       DateTime  @default(now())
+
+  @@unique([txHash, logIndex]) // Prevent duplicate processing
+  @@index([blockNumber]) // For efficient block scanning
+  @@index([eventName]) // For event type queries
 }
 
 // EventProcessingState model: tracks last processed block for each contract
 model EventProcessingState {
-  id              Int      @id @default(autoincrement())
-  contractAddress String   @unique                  // Contract address
-  contractName    String                            // Human-readable name (e.g., "Bridge", "Oracle")
-  lastProcessedBlock Int   @default(0)              // Last block number processed
-  updatedAt       DateTime @updatedAt
+  id                 Int      @id @default(autoincrement())
+  contractAddress    String   @unique // Contract address
+  contractName       String // Human-readable name (e.g., "Bridge", "Oracle")
+  lastProcessedBlock Int      @default(0) // Last block number processed
+  updatedAt          DateTime @updatedAt
 }
 
 // SecurityViolation model: tracks all security violations and enforcement actions
 model SecurityViolation {
-  id              Int      @id @default(autoincrement())
-  user            User     @relation(fields: [userId], references: [id])
-  userId          String
-  violationType   String                               // Type of violation (e.g., "RATE_LIMIT", "SUSPICIOUS_PATTERN", "COOLDOWN")
-  endpoint        String                               // Endpoint that was accessed
-  severity        String                               // Severity level: "LOW", "MEDIUM", "HIGH", "CRITICAL"
-  description     String                               // Detailed description of the violation
-  ipAddress       String?                              // IP address of the violator
-  userAgent       String?                              // User agent string
-  metadata        String?                              // JSON string with additional violation data
-  actionTaken     String?                              // Action taken (e.g., "FLAGGED", "LOCKED", "WARNING")
-  lockDuration    Int?                                 // Duration of lock in hours (if applicable)
-  resolvedBy      String?                              // Admin who resolved/unflagged (if applicable)
-  resolvedAt      DateTime?                            // When violation was resolved
-  createdAt       DateTime @default(now())
-  
-  @@index([userId])                                    // For user violation queries
-  @@index([violationType])                             // For violation type analysis
-  @@index([severity])                                  // For severity-based queries
-  @@index([createdAt])                                 // For time-based analysis
+  id            Int       @id @default(autoincrement())
+  user          User      @relation(fields: [userId], references: [id])
+  userId        String
+  violationType String // Type of violation (e.g., "RATE_LIMIT", "SUSPICIOUS_PATTERN", "COOLDOWN")
+  endpoint      String // Endpoint that was accessed
+  severity      String // Severity level: "LOW", "MEDIUM", "HIGH", "CRITICAL"
+  description   String // Detailed description of the violation
+  ipAddress     String? // IP address of the violator
+  userAgent     String? // User agent string
+  metadata      String? // JSON string with additional violation data
+  actionTaken   String? // Action taken (e.g., "FLAGGED", "LOCKED", "WARNING")
+  lockDuration  Int? // Duration of lock in hours (if applicable)
+  resolvedBy    String? // Admin who resolved/unflagged (if applicable)
+  resolvedAt    DateTime? // When violation was resolved
+  createdAt     DateTime  @default(now())
+
+  @@index([userId]) // For user violation queries
+  @@index([violationType]) // For violation type analysis
+  @@index([severity]) // For severity-based queries
+  @@index([createdAt]) // For time-based analysis
 }
 
 // Fee collection tracking model for HyperAdmin reconciliation
 model FeeCollection {
-  id            String   @id @default(cuid())
-  userId        String                                // User who paid the fee
-  feeType       String                                // "swap" or "burn"
-  feeAmount     Decimal                               // Fee amount in UGDX
-  originalAmount Decimal                              // Original transaction amount
-  txHash        String   @unique                     // On-chain transaction hash
-  blockNumber   Int                                   // Block number for verification
-  feeRecipient  String                               // Address that received the fee
-  createdAt     DateTime @default(now())
-  processedAt   DateTime @updatedAt
-  
+  id             String   @id @default(cuid())
+  userId         String // User who paid the fee
+  feeType        String // "swap" or "burn"
+  feeAmount      Decimal // Fee amount in UGDX
+  originalAmount Decimal // Original transaction amount
+  txHash         String   @unique // On-chain transaction hash
+  blockNumber    Int // Block number for verification
+  feeRecipient   String // Address that received the fee
+  createdAt      DateTime @default(now())
+  processedAt    DateTime @updatedAt
+
   // Relations
   user User @relation(fields: [userId], references: [id])
-  
-  @@index([userId])                                   // For user fee queries
-  @@index([feeType])                                  // For fee type analysis
-  @@index([txHash])                                   // For transaction lookup
-  @@index([createdAt])                                // For time-based analysis
+
+  @@index([userId]) // For user fee queries
+  @@index([feeType]) // For fee type analysis
+  @@index([txHash]) // For transaction lookup
+  @@index([createdAt]) // For time-based analysis
+}
+
+// P2P Transaction model: records peer-to-peer transfers
+model P2PTransaction {
+  id               String   @id @default(cuid())
+  senderId         String // User who sent the transfer
+  senderAddress    String // Sender's wallet address
+  recipientAddress String? // Recipient wallet address (for on-chain)
+  recipientPhone   String? // Recipient phone (for mobile money)
+  amount           Decimal // Amount transferred (in UGDX)
+  fee              Decimal  @default(0) // P2P fee charged
+  netAmount        Decimal // Net amount received
+  transferType     String // "onchain" or "mobile_money"
+  memo             String? // Optional transfer memo
+  status           String   @default("PENDING") // PENDING, COMPLETED, FAILED
+  txHash           String? // Blockchain transaction hash
+  metaTxRequest    String? // JSON of meta-transaction request
+  signature        String? // User's signature for meta-tx
+  gasInTokens      Boolean  @default(false) // Whether gas was paid in tokens
+  mmJobId          Int? // Associated mobile money job ID
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  sender User            @relation(fields: [senderId], references: [id])
+  mmJob  MobileMoneyJob? @relation(fields: [mmJobId], references: [id])
+
+  @@index([senderId])
+  @@index([transferType])
+  @@index([status])
+  @@index([txHash])
+  @@index([createdAt])
+}
+
+// P2P Analytics model: tracks daily/monthly P2P metrics
+model P2PAnalytics {
+  id                  String   @id @default(cuid())
+  date                DateTime // Date for these metrics
+  totalTransactions   Int      @default(0) // Total P2P transactions
+  totalVolume         Decimal  @default(0) // Total volume in UGDX
+  onChainTransactions Int      @default(0) // On-chain P2P count
+  onChainVolume       Decimal  @default(0) // On-chain P2P volume
+  mmTransactions      Int      @default(0) // Mobile money P2P count
+  mmVolume            Decimal  @default(0) // Mobile money P2P volume
+  totalFees           Decimal  @default(0) // Total fees collected
+  uniqueSenders       Int      @default(0) // Unique users who sent
+  avgTransactionSize  Decimal  @default(0) // Average transaction size
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([date])
+  @@index([date])
 }
