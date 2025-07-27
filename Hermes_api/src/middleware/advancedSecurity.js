@@ -225,10 +225,6 @@ const createAdvancedRateLimit = (options = {}) => {
           violations: userData.violations
         });
       }
-    },
-    onLimitReached: async (req, res) => {
-      const userKey = getUserKey(req);
-      logSecurityEvent('warn', userKey, `🚨 RATE LIMIT REACHED: ${endpoint}`);
     }
   });
 };
@@ -389,9 +385,14 @@ const createProgressiveSlowDown = (endpoint = 'unknown') => {
     delayMs: 1000, // Add 1 second delay per request after delayAfter
     maxDelayMs: 10000, // Maximum delay of 10 seconds
     keyGenerator: (req) => getUserKey(req),
-    onLimitReached: (req, res) => {
-      const userKey = getUserKey(req);
-      logSecurityEvent('warn', userKey, `🐌 SLOW DOWN ACTIVATED: ${endpoint}`);
+    // onLimitReached removed - deprecated in v7
+    skip: (req, res) => {
+      // Log when slowdown is activated (when delay > 0)
+      if (req.slowDown && req.slowDown.delay > 0) {
+        const userKey = getUserKey(req);
+        logSecurityEvent('warn', userKey, `🐌 SLOW DOWN ACTIVATED: ${endpoint}`);
+      }
+      return false; // Don't skip any requests
     }
   });
 };

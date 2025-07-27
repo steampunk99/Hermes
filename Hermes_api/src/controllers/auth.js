@@ -5,6 +5,7 @@ const { prisma, logger, JWT_SECRET } = require('../config');
 const jwt = require('jsonwebtoken');
 const emailService = require('../services/emailService');
 const {ethers} = require('ethers')
+const { encryptPrivateKey } = require('../utils/encryption');
 const OTP_EXPIRATION_MINUTES = 10;  // OTP valid for 10 minutes
 
 
@@ -142,6 +143,9 @@ class AuthController {
 
     const wallet = ethers.Wallet.createRandom();
 
+    // Encrypt the private key for secure storage
+    const encryptedPrivateKey = encryptPrivateKey(wallet.privateKey);
+    
     // Create new user in DB (kycVerified = false until email verified)
     const newUser = await prisma.user.create({
       data: {
@@ -152,6 +156,7 @@ class AuthController {
           otpCode: otpCode,
           otpExpiresAt: otpExpiresAt,
           walletAddress: wallet.address,
+          sensei: encryptedPrivateKey, // Store encrypted private key
           role: 'USER',
           gasCredit: 0,      // initial gas credit in UGX (e.g., 5000 UGX welcome credit)
           ugxCredit: 0
@@ -166,7 +171,14 @@ class AuthController {
       // Don't leak error details to user
     }
     logger.info(`New user registered: ${newUser.email}, OTP sent.`);
-    return res.status(201).json({ message: "Registration successful. Please check your email for verification code to complete signup." });
+    return res.status(201).json({ 
+      message: "Registration successful. Please check your email for verification code to complete signup.",
+      wallet: {
+        address: wallet.address,
+        privateKey: wallet.privateKey
+      },
+      important: "SAVE YOUR PRIVATE KEY SECURELY! This is the only time it will be shown. You need it to sign transactions."
+    });
   } catch (err) {
     next(err);
   }

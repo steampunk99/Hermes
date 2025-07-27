@@ -1,5 +1,5 @@
     // src/controllers/userController.js
-const { prisma, ugdxContract, logger } = require('../config');
+const { prisma, logger, ugdxContract, forwarderContract } = require('../config');
 const { ethers } = require('ethers');
 
 class UserController {
@@ -33,11 +33,16 @@ async getProfile (req, res, next)  {
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
-      // Fetch on-chain UGDX token balance using Ethers.js (if walletAddress is set)
+      // Fetch on-chain UGDX token balance and forwarder nonce using Ethers.js (if walletAddress is set)
       let ugdxBalance = 0;
+      let forwarderNonce = null;
       if (user.walletAddress) {
         try {
           const balanceBigInt = await ugdxContract.balanceOf(user.walletAddress);
+          ugdxBalance = Number(balanceBigInt) / 1e18;
+          forwarderNonce = await forwarderContract.nonces(user.walletAddress);
+          logger.info(`[DEBUG] UGDX balance for ${user.walletAddress}: ${ugdxBalance} | Forwarder nonce: ${forwarderNonce}`);
+        
           // Convert from Wei (assuming UGDX has 18 decimals) to a human-readable number
           ugdxBalance = parseFloat(ethers.formatEther(balanceBigInt));
         } catch (chainErr) {
@@ -48,7 +53,8 @@ async getProfile (req, res, next)  {
       return res.json({
         ugdxBalance,
         ugxCredit: parseFloat(user.ugxCredit),
-        gasCredit: parseFloat(user.gasCredit)
+        gasCredit: parseFloat(user.gasCredit),
+        forwarderNonce: forwarderNonce !== null ? Number(forwarderNonce) : null
       });
     } catch (err) {
       next(err);

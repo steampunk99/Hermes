@@ -1,7 +1,13 @@
-    // src/controllers/transactionController.js
 const { prisma, logger, ugdxContract, bridgeContract, forwarderContract, relayer, provider, PROVIDER_FEE_BPS } = require('../config');
 const ethers = require('ethers');
 const mmService = require('../services/mmService');
+const {
+  verifyMetaTxSignature,
+  executeMetaTx,
+  createBridgeBurnMetaTx,
+  createUGDXTransferMetaTx,
+  getForwarderDomain
+} = require('../utils/metaTx');
 
 // Helper: calculate provider fee and net UGX after fee
 function applyProviderFee(amountUgx) {
@@ -81,6 +87,8 @@ class TransactionController {
       //   phone: phone,
       //   trans_id: mmJob.id
       // });
+
+      // console.log(result)
       
       logger.info(`Created manual payment request: ${amount} UGX collection for user ${user.email} (Job #${mmJob.id}). Awaiting admin confirmation.`);
       // Respond to client with net UGDX to be minted and transaction info
@@ -91,7 +99,7 @@ class TransactionController {
         netUGDX: ugdxToMint,
         feeUGX: fee,
         transactionId: txn.id,
-        status: "PENDING_PAYMENT"
+        status: "PENDING"
       });
     } catch (err) {
       next(err);
@@ -253,150 +261,7 @@ class TransactionController {
     }
   };
 
-// POST /transactions/send - user sends UGDX to address or phone
- async sendUGDX (req, res, next) {
-  try {
-    const userId = req.user.userId;
-    const { amountUGDX, phone, toAddress, signature } = req.body;
-    
-    if (!amountUGDX || amountUGDX <= 0) {
-      return res.status(400).json({ error: "Send amount must be greater than 0." });
-    }
-    
-    // Get user information
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ error: "User not found" });
-    
-    if (phone) {
-      // User is sending UGX to a phone (mobile money transfer)
-      const targetPhone = phone;
-      // Ensure user has enough UGDX on-chain (if wallet linked)
-      if (user.walletAddress) {
-        const balance = await ugdxContract.balanceOf(user.walletAddress);
-        if (parseFloat(ethers.utils.formatUnits(balance, 18)) < amountUGDX) {
-          return res.status(400).json({ error: "Insufficient UGDX balance." });
-        }
-      }
-      const { fee, net } = applyProviderFee(amountUGDX);
-      const ugxToSend = net;
-      // Determine provider based on phone number
-      const providerName = targetPhone.startsWith('077') || targetPhone.startsWith('078') ? 'MTN' : 'AIRTEL';
-      
-      // Create MobileMoneyJob and Transaction records (type "SEND")
-      const mmJob = await prisma.mobileMoneyJob.create({data: {
-        userId,
-        phone: targetPhone,
-        amount: ugxToSend,  // Schema uses 'amount', not 'amountUGX'
-        type: "DISBURSE",
-        provider: providerName,
-        status: "PENDING"
-      }});
-      const txn = await prisma.transaction.create({ data: {
-        userId,
-        type: "SEND",
-        amountUGX: ugxToSend,
-        ugdxAmount: amountUGDX,
-        toPhone: targetPhone,
-        status: "PENDING",
-        mmJobId: mmJob.id
-      }});
-      if (req.user.role !== 'ADVANCED') {
-        // Normal user: burn UGDX via meta-tx then trigger payout
-        if (!signature) {
-          return res.status(400).json({ error: "Meta-transaction signature required for send-to-phone." });
-        }
-        const iface = new ethers.utils.Interface([ "function burnForWithdrawal(uint256 amount) public" ]);
-        const data = iface.encodeFunctionData("burnForWithdrawal", [ ethers.utils.parseUnits(amountUGDX.toString(), 18) ]);
-        try {
-          const nonce = await forwarderContract.getNonce(user.walletAddress);
-          const tx = await forwarderContract.execute(bridgeContract.address, data, user.walletAddress, nonce, signature);
-          const receipt = await tx.wait();
-          logger.info(`UGDX burn (send to phone) via meta-tx, txHash: ${receipt.transactionHash}`);
-          await prisma.transaction.update({
-            where: { id: txn.id },
-            data: { txHash: receipt.transactionHash }
-          });
-          // Deduct gas credit as above...
-        } catch (err) {
-          logger.error("Meta-transaction burn for send failed:", err);
-          return res.status(500).json({ error: "Failed to burn tokens for send." });
-        }
-        // Initiate mobile money disbursement for normal user
-        await mmService.requestWithdrawal({
-          amount: ugxToSend,
-          phone: targetPhone,
-          trans_id: mmJob.id.toString()
-        });
-        logger.info(`Mobile money send requested (Job #${mmJob.id}) for user ${user.email}`);
-      } else {
-        // Advanced user: user will burn tokens on-chain themselves
-        logger.info(`Advanced user ${user.email} will burn ${amountUGDX} UGDX on-chain for send-to-phone. Awaiting burn event.`);
-        // No mobile money request now; wait for event to trigger payout
-      }
-      return res.status(200).json({
-        message: "Transfer initiated. UGX will be sent once token burn is confirmed on-chain.",
-        netUGX: ugxToSend,
-        feeUGX: fee,
-        transactionId: txn.id
-      });
-    } else if (toAddress) {
-      // User is sending UGDX to a crypto address (on-chain transfer)
-      const targetAddress = toAddress;
-      // Ensure user has enough UGDX on-chain
-      if (user.walletAddress) {
-        const balance = await ugdxContract.balanceOf(user.walletAddress);
-        if (parseFloat(ethers.utils.formatUnits(balance, 18)) < amountUGDX) {
-          return res.status(400).json({ error: "Insufficient UGDX balance." });
-        }
-      }
-      // Create Transaction record for this send operation
-      const txn = await prisma.transaction.create({
-        data: {
-          userId,
-          type: "SEND",
-          amountUGX: 0,  // no UGX involved in crypto send
-          ugdxAmount: amountUGDX,
-          toAddress: targetAddress,
-          status: "PENDING"
-        }
-      });
-      if (req.user.role !== 'ADVANCED') {
-        // Normal user: burn UGDX via meta-tx
-        if (!signature) {
-          return res.status(400).json({ error: "Meta-transaction signature required for send-to-address." });
-        }
-        const iface = new ethers.utils.Interface([ "function burnForWithdrawal(uint256 amount) public" ]);
-        const data = iface.encodeFunctionData("burnForWithdrawal", [ ethers.utils.parseUnits(amountUGDX.toString(), 18) ]);
-        try {
-          const nonce = await forwarderContract.getNonce(user.walletAddress);
-          const tx = await forwarderContract.execute(bridgeContract.address, data, user.walletAddress, nonce, signature);
-          const receipt = await tx.wait();
-          logger.info(`UGDX burn (send to address) via meta-tx, txHash: ${receipt.transactionHash}`);
-          await prisma.transaction.update({
-            where: { id: txn.id },
-            data: { txHash: receipt.transactionHash }
-          });
-          // Deduct gas credit as above...
-        } catch (err) {
-          logger.error("Meta-transaction burn for send failed:", err);
-          return res.status(500).json({ error: "Failed to burn tokens for send." });
-        }
-      } else {
-        // Advanced user will perform the burn on-chain themselves
-        logger.info(`Advanced user ${user.email} will burn ${amountUGDX} UGDX on-chain for send-to-address. Awaiting burn event.`);
-      }
-      // Respond with transaction info
-      return res.status(200).json({
-        message: "Transfer initiated. UGDX will be sent once token burn is confirmed on-chain.",
-        transactionId: txn.id
-      });
-    } else {
-      return res.status(400).json({ error: "Invalid request. Specify a toAddress or phone." });
-    }
-  } catch (err) {
-    next(err);
-  }
-};
+
 
 // GET /transactions/history - list of user's past transactions
  async getHistory (req, res, next) {

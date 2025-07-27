@@ -11,16 +11,15 @@ import "./Coin.sol";
 import "./Oracle.sol";
 
 /**
- * @title UGDX Bridge Contract
- * @dev Main bridge contract handling USDT ↔ UGDX swaps and mobile money withdrawals
- * @notice This contract manages the conversion between USDT and UGDX tokens,
- *         and facilitates burning UGDX for mobile money transfers
+ * @title UGDX Bridge Contract with P2P Integration
+ * @dev Main bridge contract handling USDT ↔ UGDX swaps, mobile money withdrawals, and P2P monitoring
+ * @notice This contract manages conversions and provides analytics for the entire UGDX ecosystem
  */
 
 contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
     using SafeERC20 for IERC20;
 
-    //Contract instances
+    // Contract instances
     UGDX public immutable ugdxToken;
     IERC20 public immutable usdtToken;
 
@@ -28,73 +27,198 @@ contract UGDXBridge is Ownable, Pausable, ReentrancyGuard, ERC2771Context {
     uint256 public maxPriceAgeForSwaps = 3600; // 1 hour max
     bool public useOracleForPricing = false;
 
-    //Exchange rate: how many ugx per 1 usd with 18d
+    // Exchange rate: how many UGX per 1 USD with 18 decimals
     uint256 public ugxPerUSD = 3700 * 10**18;
 
-    //fee settings in basis points
-    uint256 public swapFeeBps = 50; //0.5%
-    uint256 public burnFeeBps = 25; //0.25% default
+    // Fee settings in basis points
+    uint256 public swapFeeBps = 50; // 0.5%
+    uint256 public burnFeeBps = 25; // 0.25% default
     uint256 public constant MAX_FEE_BPS = 500; // 5%
 
-    //Fee recipient
+    // Fee recipient
     address public feeRecipient;
 
-    //Reserve tracking
+    // Reserve tracking
     uint256 public totalUSDTReserves;
     uint256 public totalUGDXMinted;
 
-    //Events for off-chain processing
-    event USDTSwappedForUGDX(
-        address indexed user,
-        uint256 usdtAmount,
-        uint256 ugdxAmount,
-        uint256 feeAmount,
-        uint256 exchangeRate
-    );
+    // === P2P INTEGRATION ===
+    
+    // P2P Analytics Storage
+    struct P2PMetrics {
+        uint256 totalOnChainTransfers;
+        uint256 totalMMTransfers;
+        uint256 totalP2PVolume;
+        uint256 totalP2PFees;
+        uint256 dailyP2PCount;
+        uint256 lastDayReset;
+    }
+    
+    P2PMetrics public p2pMetrics;
+    
+    // Daily P2P limits (anti-money laundering)
+    uint256 public dailyP2PLimit = 50000000 * 10**18; // 50M UGDX per day
+    mapping(address => uint256) public userDailyP2P;
+    mapping(address => uint256) public userLastP2PDay;
+    
+    // === ORIGINAL EVENTS ===
+    event USDTSwappedForUGDX(address indexed user, uint256 usdtAmount, uint256 ugdxAmount, uint256 feeAmount, uint256 exchangeRate);
     event FeeCollected(address indexed from, uint256 amount, string feeType);
-
-    event UGDXBurnedForWithdrawal(
-        address indexed user,
-        uint256 ugdxAmount,
-        uint256 timestamp
-    );
-
-     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event UGDXBurnedForWithdrawal(address indexed user, uint256 ugdxAmount, uint256 timestamp);
+    event OracleUpdated(address indexed oldOracle, address indexed newOracle);
     event PricingModeChanged(bool useOracle);
     event SwapRejectedStalePrice(address indexed user, uint256 priceAge);
-
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
     event SwapFeeUpdated(uint256 oldFee, uint256 newFee);
     event EmergencyWithdrawal(address indexed token, uint256 amount, address indexed to);
     event MobileMoneyMintUGDX(address indexed user, uint256 ugdxAmount, uint256 timestamp);
+    
+    // === P2P MONITORING EVENTS ===
+    event P2PActivityDetected(address indexed user, uint256 amount, string transferType, uint256 timestamp);
+    event P2PDailyLimitExceeded(address indexed user, uint256 attempted, uint256 limit);
+    event P2PMetricsUpdated(uint256 totalVolume, uint256 dailyCount);
 
-
-    /**
-     * @dev Constructor initializes the bridge with token addresses
-     * @param _ugdxToken Address of the UGDX token contract
-     * @param _usdtToken Address of the USDT token contract (Polygon)
-     * @param _initialOwner Address that will own this contract
-     * @param trustedForwarder The address of the trusted forwarder for meta-transactions
-     */
-
-    constructor(address _ugdxToken, address _usdtToken, address _initialOwner, address trustedForwarder,address _priceOracle) 
-    Ownable(_initialOwner)
-    ERC2771Context(trustedForwarder) {
-        require(_ugdxToken != address(0), "Bridge: Invalid ugdx address");
-        require(_usdtToken != address(0), "Bridge: Invalid usdt address");
+    constructor(
+        address _ugdxToken,
+        address _usdtToken,
+        address _initialOwner,
+        address trustedForwarder,
+        address _priceOracle
+    ) 
+        Ownable(_initialOwner)
+        ERC2771Context(trustedForwarder) 
+    {
+        require(_ugdxToken != address(0), "Bridge: Invalid UGDX address");
+        require(_usdtToken != address(0), "Bridge: Invalid USDT address");
 
         ugdxToken = UGDX(_ugdxToken);
         usdtToken = IERC20(_usdtToken);
 
         if(_priceOracle != address(0)){
-            // Try to validate oracle interface
             try IPriceOracle(_priceOracle).getLatestPrice() returns (uint256, uint256, bool) {
                 priceOracle = IPriceOracle(_priceOracle);
             } catch {
                 revert("Bridge: Invalid oracle interface");
             }
         }
+        
         feeRecipient = _initialOwner;
+        
+        // Initialize P2P metrics
+        p2pMetrics.lastDayReset = block.timestamp;
+    }
+
+    // === P2P INTEGRATION FUNCTIONS ===
+    
+    /**
+     * @dev Called by UGDX token contract to update P2P metrics
+     * @param user Address performing P2P transfer
+     * @param amount Amount being transferred
+     * @param transferType "onchain" or "mm"
+     */
+    function updateP2PMetrics(
+        address user,
+        uint256 amount,
+        string calldata transferType
+    ) external {
+        require(msg.sender == address(ugdxToken), "Bridge: Only UGDX token can call");
+        
+        // Reset daily counters if new day
+        if (block.timestamp >= p2pMetrics.lastDayReset + 1 days) {
+            p2pMetrics.dailyP2PCount = 0;
+            p2pMetrics.lastDayReset = block.timestamp;
+        }
+        
+        // Check daily limits for user
+        uint256 currentDay = block.timestamp / 1 days;
+        if (userLastP2PDay[user] != currentDay) {
+            userDailyP2P[user] = 0;
+            userLastP2PDay[user] = currentDay;
+        }
+        
+        // Enforce daily limit
+        if (userDailyP2P[user] + amount > dailyP2PLimit) {
+            emit P2PDailyLimitExceeded(user, amount, dailyP2PLimit);
+            revert("Bridge: Daily P2P limit exceeded");
+        }
+        
+        // Update metrics
+        userDailyP2P[user] += amount;
+        p2pMetrics.totalP2PVolume += amount;
+        p2pMetrics.dailyP2PCount += 1;
+        
+        if (keccak256(bytes(transferType)) == keccak256(bytes("onchain"))) {
+            p2pMetrics.totalOnChainTransfers += 1;
+        } else if (keccak256(bytes(transferType)) == keccak256(bytes("mm"))) {
+            p2pMetrics.totalMMTransfers += 1;
+        }
+        
+        emit P2PActivityDetected(user, amount, transferType, block.timestamp);
+        emit P2PMetricsUpdated(p2pMetrics.totalP2PVolume, p2pMetrics.dailyP2PCount);
+    }
+
+       /**
+     * @dev Set daily P2P limit for AML compliance
+     */
+    function setDailyP2PLimit(uint256 newLimit) external onlyOwner {
+        require(newLimit > 0, "Bridge: Invalid limit");
+        dailyP2PLimit = newLimit;
+    }
+    
+    /**
+     * @dev Check user's remaining P2P limit for today
+     */
+    function getUserP2PLimit(address user) external view returns (uint256 remaining, uint256 used) {
+        uint256 currentDay = block.timestamp / 1 days;
+        
+        if (userLastP2PDay[user] != currentDay) {
+            return (dailyP2PLimit, 0);
+        }
+        
+        used = userDailyP2P[user];
+        remaining = dailyP2PLimit > used ? dailyP2PLimit - used : 0;
+    }
+
+       // === ENHANCED ANALYTICS ===
+    
+    /**
+     * @dev Get comprehensive ecosystem metrics
+     */
+    function getEcosystemMetrics() external view returns (
+        uint256 totalUSDTReserves_,
+        uint256 totalUGDXMinted_,
+        uint256 currentExchangeRate,
+        uint256 totalP2PVolume,
+        uint256 totalOnChainP2P,
+        uint256 totalMMP2P,
+        uint256 dailyP2PCount,
+        uint256 avgP2PSize
+    ) {
+        uint256 currentRate = _getCurrentExchangeRate();
+        
+        uint256 avgSize = 0;
+        if (p2pMetrics.totalOnChainTransfers + p2pMetrics.totalMMTransfers > 0) {
+            avgSize = p2pMetrics.totalP2PVolume / (p2pMetrics.totalOnChainTransfers + p2pMetrics.totalMMTransfers);
+        }
+        
+        return (
+            totalUSDTReserves,
+            totalUGDXMinted,
+            currentRate,
+            p2pMetrics.totalP2PVolume,
+            p2pMetrics.totalOnChainTransfers,
+            p2pMetrics.totalMMTransfers,
+            p2pMetrics.dailyP2PCount,
+            avgSize
+        );
+    }
+    
+    /**
+     * @dev Reset P2P metrics (admin function for maintenance)
+     */
+    function resetP2PMetrics() external onlyOwner {
+        delete p2pMetrics;
+        p2pMetrics.lastDayReset = block.timestamp;
     }
 
 

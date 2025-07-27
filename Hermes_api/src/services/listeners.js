@@ -1,4 +1,5 @@
 const { eventProcessor } = require('./eventProcessor');
+const p2pEventProcessor = require('./p2pEventProcessor');
 const { logger } = require('../config');
 
 /**
@@ -6,9 +7,13 @@ const { logger } = require('../config');
  */
 async function initEventListeners() {
   try {
-    logger.info('☯️...');
+    logger.info('☯️ Initializing event listeners...');
     await eventProcessor.initialize();
-    logger.info('☯️ initialized successfully');
+    
+    // Initialize P2P event listeners
+    p2pEventProcessor.initP2PEventListeners();
+    
+    logger.info('☯️ Event listeners initialized successfully');
   } catch (error) {
     logger.error('Failed to initialize ☯️:', error);
     throw error;
