@@ -13,7 +13,7 @@ const logger = winston.createLogger({
   transports: [ new winston.transports.Console() ],
   format: winston.format.combine(
     winston.format.colorize(),
-    winston.format.simple()
+    winston.format.cli()
   )
 });
 
@@ -31,11 +31,23 @@ const relayer = new ethers.Wallet(process.env.RELAYER_PRIVATE_KEY, provider);
 
 // ABI definitions for required contract functions (UGDX token and Bridge)
 const UGDX_ABI = [
+  // Basic ERC20 functions
   "function balanceOf(address owner) view returns (uint256)",
   "function transfer(address to, uint256 amount) public returns (bool)",
   "function mint(address to, uint256 amount) public",           // owner-only
   "function burn(uint256 amount) public",                       // if owner-only, contract must hold tokens
-  "function burnFrom(address account, uint256 amount) public"   // optional, if implemented
+  "function burnFrom(address account, uint256 amount) public",   // optional, if implemented
+  
+  // P2P functions
+  "function sendP2POnChain(address to, uint256 amount, string calldata memo, bool payGasInTokens) external",
+  "function sendP2PToMM(string calldata recipientPhone, uint256 amount, string calldata memo, bool payGasInTokens) external",
+  
+  // P2P events
+  "event P2PTransferOnChain(address indexed from, address indexed to, uint256 amount, uint256 fee, string memo, uint256 timestamp)",
+  "event P2PTransferToMM(address indexed from, string indexed recipientPhone, uint256 amount, uint256 fee, string memo, uint256 timestamp)",
+  
+  // Gas payment event
+  "event GasPaidInTokens(address indexed user, uint256 gasAmount, uint256 nonce)"
 ];
 const BRIDGE_ABI = [
   // Core swap functions
@@ -61,12 +73,20 @@ const BRIDGE_ABI = [
   "event MobileMoneyMintUGDX(address indexed user, uint256 ugdxAmount, uint256 timestamp)",
   "event UGDXBurnedForWithdrawal(address indexed user, uint256 ugdxAmount, uint256 timestamp)",
   "event FeeCollected(address indexed from, uint256 amount, string feeType)",
-  "event USDTSwappedForUGDX(address indexed user, uint256 usdtAmount, uint256 ugdxAmount, uint256 feeAmount, uint256 exchangeRate)"
+  "event USDTSwappedForUGDX(address indexed user, uint256 usdtAmount, uint256 ugdxAmount, uint256 feeAmount, uint256 exchangeRate)",
+  
+  // P2P monitoring events
+  "event P2PActivityDetected(address indexed user, uint256 amount, string transferType, uint256 timestamp)",
+  "event P2PDailyLimitExceeded(address indexed user, uint256 attempted, uint256 limit)",
+  "event P2PMetricsUpdated(uint256 totalVolume, uint256 dailyCount)"
 ];
 const FORWARDER_ABI = [
-  // Minimal Forwarder ABI (OpenZeppelin ERC2771 minimal forwarder functions)
-  "function execute(address to, bytes memory data, address from, uint256 nonce, bytes signature) public returns (bool, bytes memory)",
-  "function getNonce(address from) public view returns (uint256)"
+  // Correct ABI for OpenZeppelin ERC2771Forwarder
+  "function execute((address from, address to, uint256 value, uint256 gas, uint256 nonce, bytes data, uint256 validUntil) calldata req, bytes calldata signature) public returns (bool, bytes memory)",
+  "function getNonce(address from) public view returns (uint256)",
+  "function verify((address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data) req, bytes signature) external view returns (bool)",
+  "function getNonce(address from) external view returns (uint256)",
+  "function nonces(address from) external view returns (uint256)",
 ];
 
 const ORACLE_ABI = [
