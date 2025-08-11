@@ -4,6 +4,72 @@ const mmService = require('./mmService');
 
 class P2PEventProcessor {
   
+  // Process GasPaidInTokens events from UGDX contract
+  async processGasPaidInTokensEvent(event) {
+    try {
+      const { user, tokenAmount, nonce } = event.args;
+      const txHash = event.transactionHash;
+      const blockNumber = event.blockNumber;
+
+      logger.info(`🔄 Processing GasPaidInTokens event: ${txHash}`);
+
+      // Prevent duplicate processing
+      const existingEvent = await prisma.processedEvent.findUnique({
+        where: { txHash_logIndex: { txHash, logIndex: event.logIndex } }
+      });
+      if (existingEvent && existingEvent.processed) {
+        logger.info(`⚠️ GasPaidInTokens event already processed: ${txHash}`);
+        return;
+      }
+
+      // Try to map on-chain user -> app userId
+      const senderUser = await prisma.user.findFirst({ where: { walletAddress: user.toLowerCase() } });
+
+      // Respect unique txHash on FeeCollection; if one exists (e.g., P2P fee), skip creating another
+      const existingFee = await prisma.feeCollection.findUnique({ where: { txHash } });
+      if (!existingFee) {
+        try {
+          await prisma.feeCollection.create({
+            data: {
+              userId: senderUser ? senderUser.id : undefined,
+              feeType: 'GAS_IN_TOKENS',
+              feeAmount: parseFloat((Number(tokenAmount) / 1e18).toString()),
+              originalAmount: 0,
+              txHash,
+              blockNumber,
+              feeRecipient: (await ugdxContract.getAddress()).toLowerCase()
+            }
+          });
+          logger.info(`✅ Recorded GAS_IN_TOKENS revenue for tx ${txHash}`);
+        } catch (fcErr) {
+          logger.error('Failed to create FeeCollection for GasPaidInTokens', { error: fcErr.message, txHash });
+        }
+      } else {
+        logger.info(`ℹ️ FeeCollection already exists for ${txHash}; skipping GAS_IN_TOKENS record to honor unique txHash`);
+      }
+
+      // Mark processed
+      await prisma.processedEvent.upsert({
+        where: { txHash_logIndex: { txHash, logIndex: event.logIndex } },
+        update: { processed: true, processedAt: new Date() },
+        create: {
+          txHash,
+          eventName: 'GasPaidInTokens',
+          blockNumber,
+          logIndex: event.logIndex,
+          contractAddress: event.address.toLowerCase(),
+          processed: true,
+          processedAt: new Date()
+        }
+      });
+
+      logger.info(`✅ GasPaidInTokens event processed successfully: ${txHash}`);
+    } catch (error) {
+      logger.error('❌ Error processing GasPaidInTokens event:', error);
+      throw error;
+    }
+  }
+  
   // Process P2PTransferOnChain events from UGDX contract
   async processP2POnChainEvent(event) {
     try {
@@ -48,10 +114,32 @@ class P2PEventProcessor {
         });
 
         logger.info(`✅ P2P ON-CHAIN transaction updated: ${p2pTx.id}`);
+
+        // Record protocol fee as revenue in FeeCollection (if any)
+        const feeUGDX = parseFloat(fee.toString()) / 1e18;
+        if (feeUGDX > 0) {
+          try {
+            // Map sender address to userId, if known
+            const senderUser = await prisma.user.findFirst({ where: { walletAddress: p2pTx.senderAddress } });
+            await prisma.feeCollection.create({
+              data: {
+                userId: senderUser ? senderUser.id : p2pTx.senderId,
+                feeType: 'P2P_ONCHAIN',
+                feeAmount: feeUGDX,
+                originalAmount: parseFloat(amount.toString()) / 1e18,
+                txHash,
+                blockNumber,
+                feeRecipient: (await ugdxContract.getAddress()).toLowerCase()
+              }
+            });
+          } catch (fcErr) {
+            logger.error('Failed to create FeeCollection for P2P on-chain', { error: fcErr.message, txHash });
+          }
+        }
       }
 
       // Update P2P analytics
-      await this.updateP2PAnalytics('ON_CHAIN', amount, fee, timestamp);
+      await this.updateP2PAnalytics('onchain', amount, fee, timestamp);
 
       // Mark event as processed
       await prisma.processedEvent.upsert({
@@ -129,6 +217,27 @@ class P2PEventProcessor {
           }
         });
 
+        // Record protocol fee as revenue in FeeCollection (if any)
+        const feeUGDX = parseFloat(fee.toString()) / 1e18;
+        if (feeUGDX > 0) {
+          try {
+            const senderUser = await prisma.user.findFirst({ where: { walletAddress: p2pTx.senderAddress } });
+            await prisma.feeCollection.create({
+              data: {
+                userId: senderUser ? senderUser.id : p2pTx.senderId,
+                feeType: 'P2P_TO_MM',
+                feeAmount: feeUGDX,
+                originalAmount: parseFloat(amount.toString()) / 1e18,
+                txHash,
+                blockNumber,
+                feeRecipient: (await ugdxContract.getAddress()).toLowerCase()
+              }
+            });
+          } catch (fcErr) {
+            logger.error('Failed to create FeeCollection for P2P to-MM', { error: fcErr.message, txHash });
+          }
+        }
+
         // Process mobile money disbursement using existing mmService pattern
         try {
           logger.info(`📱 Initiating mobile money disbursement for job: ${p2pTx.mmJob.id}`);
@@ -178,7 +287,7 @@ class P2PEventProcessor {
       }
 
       // Update P2P analytics
-      await this.updateP2PAnalytics('TO_MOBILE_MONEY', amount, fee, timestamp);
+      await this.updateP2PAnalytics('mobile_money', amount, fee, timestamp);
 
       // Mark event as processed
       await prisma.processedEvent.upsert({
@@ -290,6 +399,21 @@ class P2PEventProcessor {
           });
         } catch (error) {
           logger.error('❌ Error in P2PTransferToMM listener:', error);
+        }
+      });
+
+      // Listen for GasPaidInTokens events
+      ugdxContract.on('GasPaidInTokens', async (user, tokenAmount, nonce, event) => {
+        try {
+          await this.processGasPaidInTokensEvent({
+            args: { user, tokenAmount, nonce },
+            transactionHash: event.transactionHash,
+            blockNumber: event.blockNumber,
+            logIndex: event.logIndex,
+            address: event.address
+          });
+        } catch (error) {
+          logger.error('❌ Error in GasPaidInTokens listener:', error);
         }
       });
 

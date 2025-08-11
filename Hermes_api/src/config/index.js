@@ -20,6 +20,12 @@ const logger = winston.createLogger({
 // Load environment variables for reuse
 const JWT_SECRET = process.env.JWT_SECRET;
 const PROVIDER_FEE_BPS = parseInt(process.env.PROVIDER_FEE_BPS || "50"); // e.g., 0.5% fee
+const P2P_FEE_BPS = 10; // 0.1%
+
+// P2P batch and per-transaction limits (configurable via env)
+const P2P_BATCH_MAX = parseInt(process.env.P2P_BATCH_MAX || '8', 10);
+const P2P_MIN_TX_UGDX = parseFloat(process.env.P2P_MIN_TX_UGDX || '1000');
+const P2P_MAX_TX_UGDX = parseFloat(process.env.P2P_MAX_TX_UGDX || '10000000');
 
 // Configure Ethers providers (connect to Ethereum/Polygon network)
 // HTTP provider for regular transactions
@@ -41,6 +47,8 @@ const UGDX_ABI = [
   // P2P functions
   "function sendP2POnChain(address to, uint256 amount, string calldata memo, bool payGasInTokens) external",
   "function sendP2PToMM(string calldata recipientPhone, uint256 amount, string calldata memo, bool payGasInTokens) external",
+  // Batch P2P function
+  "function batchSendP2POnChain(address[] calldata recipients, uint256[] calldata amounts, string[] calldata memos, bool payGasInTokens) external",
   
   // P2P events
   "event P2PTransferOnChain(address indexed from, address indexed to, uint256 amount, uint256 fee, string memo, uint256 timestamp)",
@@ -116,5 +124,9 @@ module.exports = {
   bridgeContract,
   forwarderContract,
   oracleContract,
-  PROVIDER_FEE_BPS
+  PROVIDER_FEE_BPS,
+  P2P_FEE_BPS,
+  P2P_BATCH_MAX,
+  P2P_MIN_TX_UGDX,
+  P2P_MAX_TX_UGDX
 };

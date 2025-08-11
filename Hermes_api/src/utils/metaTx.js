@@ -302,6 +302,39 @@ async function createP2POnChainMetaTx(userAddress, recipientAddress, amount, mem
 }
 
 /**
+ * Create a meta-transaction for P2P batch on-chain transfer
+ * @param {string} userAddress - User's address
+ * @param {string[]} recipients - Recipient addresses
+ * @param {bigint[]} amountsWei - Amounts in wei matching recipients
+ * @param {string[]} memos - Memos per item
+ * @param {boolean} payGasInTokens - Whether to pay gas in tokens
+ * @param {Object} ugdxContract - UGDX contract instance
+ * @param {Object} forwarderContract - Forwarder contract instance
+ * @param {number} chainId - Network chain ID
+ */
+async function createP2PBatchOnChainMetaTx(userAddress, recipients, amountsWei, memos, payGasInTokens, ugdxContract, forwarderContract, chainId) {
+  const data = ugdxContract.interface.encodeFunctionData('batchSendP2POnChain', [
+    recipients,
+    amountsWei,
+    memos,
+    payGasInTokens
+  ]);
+
+  const nonce = await forwarderContract.nonces(userAddress);
+
+  const request = createMetaTxRequest(
+    userAddress,
+    getContractAddress(ugdxContract),
+    data,
+    nonce,
+    chainId,
+    getContractAddress(forwarderContract)
+  );
+
+  return request;
+}
+
+/**
  * Create a meta-transaction for P2P to mobile money transfer
  * @param {string} userAddress - User's address
  * @param {string} recipientPhone - Recipient phone number
@@ -403,6 +436,7 @@ module.exports = {
   createUGDXTransferMetaTx,
   createBridgeBurnMetaTx,
   createP2POnChainMetaTx,
+  createP2PBatchOnChainMetaTx,
   createP2PToMMMetaTx,
   createAndSignP2POnChainMetaTx,
   getContractAddress // Export utility function

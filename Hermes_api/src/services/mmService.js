@@ -1,6 +1,6 @@
 const axios = require('axios');
 const config = require('../config/mmConfig');
-const logger = require('../services/logger');
+const { logger } = require('../config');
 
 
 class UgandaMobileMoneyUtil {
