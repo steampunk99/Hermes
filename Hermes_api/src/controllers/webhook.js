@@ -1,51 +1,50 @@
 // src/controllers/webhookController.js
-const { prisma, logger } = require('../config');
+const { prisma, logger, bridgeContract } = require('../config');
+const { ethers } = require('ethers');
 
 exports.handleMMCallback = async (req, res, next) => {
   try {
-    // Assume provider sends JSON with at least: externalId or reference (we used jobId as external reference), status, maybe transaction details.
+
     const { status, type, trans_id } = req.body;
-    // externalId or reference should correspond to our MobileMoneyJob ID
+    
     const jobId = trans_id;
     if (!jobId) {
       logger.warn("Received MM callback with no reference ID");
       return res.status(400).send("No reference ID");
     }
-    const mmJob = await prisma.mobileMoneyJob.findUnique({ where: { id: Number(jobId) } });
+    const mmJob = await prisma.mobileMoneyJob.findUnique({ 
+      where: { id: Number(jobId) },
+      include: { user: true }
+    });
     if (!mmJob) {
       logger.error("MobileMoneyJob not found for ID:", jobId);
       return res.status(404).send("Job not found");
     }
     // Update mmJob status based on callback
     let newStatus;
-    if (status === 'SUCCESSFUL') {
-      newStatus = 'SUCCESSFUL';
-    } else if (status === 'PENDING') {
-      newStatus = 'PENDING';
-    
-    } else if (status === 'FAILED') {
-      newStatus = 'FAIL';
-    } else {
-      newStatus = status || 'UNKNOWN';
-    }
+    if (status === 'SUCCESSFUL') newStatus = 'SUCCESSFUL';
+    else if (status === 'PENDING') newStatus = 'PENDING';
+    else if (status === 'FAILED') newStatus = 'FAILED';
+    else newStatus = status || 'UNKNOWN';
     await prisma.mobileMoneyJob.update({
       where: { id: mmJob.id },
       data: {
         status: newStatus,
-        externalRef: trans_id  
+        trans_id: String(trans_id)
       }
     });
 
 
-        if (mmJob && mmJob.type === 'COLLECT' && status === 'SUCCESSFUL') {
+    // Deposit flow: on SUCCESSFUL collection, mint to user's wallet via Bridge
+    if (mmJob && mmJob.type === 'DEPOSIT' && status === 'SUCCESSFUL') {
       const txRecord = await prisma.transaction.findFirst({ where: { mmJobId: mmJob.id } });
       if (txRecord && txRecord.type === 'MINT') {
         const ugdxAmount = txRecord.ugdxAmount;
         try {
-          // Use Bridge contract to mint tokens to user (Bridge will update reserves internally)
-          const amountBN = ethers.utils.parseUnits(ugdxAmount.toString(), 18);
+          // Use Bridge contract to mint tokens to user (Bridge updates reserves internally)
+          const amountBN = ethers.parseUnits(ugdxAmount.toString(), 18);
           const mintTx = await bridgeContract.mintTo(mmJob.user.walletAddress, amountBN);
-          await mintTx.wait();
+          const receipt = await mintTx.wait();
           logger.info(`Minted ${ugdxAmount} UGDX to ${mmJob.user.walletAddress} via Bridge (txHash: ${mintTx.hash}).`);
           // Mark transaction as completed with the on-chain tx hash
           await prisma.transaction.update({
@@ -58,8 +57,8 @@ exports.handleMMCallback = async (req, res, next) => {
       }
     }
 
-    // If the job was a withdrawal (DISBURSE) and succeeded, finalize the Transaction (which should already have had tokens burned on-chain)
-    if (mmJob.type === 'DISBURSE' && newStatus === 'SUCCESSFUL') {
+    // Withdrawal flow: if DISBURSE succeeded, mark related transactions as completed
+    if (mmJob.type === 'WITHDRAW' && newStatus === 'SUCCESSFUL') {
       const txRecords = await prisma.transaction.findMany({ where: { mmJobId: mmJob.id } });
       for (let tx of txRecords) {
         // Mark each related transaction as completed
@@ -69,7 +68,7 @@ exports.handleMMCallback = async (req, res, next) => {
         });
       }
     }
-    logger.info(`Processed MM callback for job ${jobId}: status ${newStatus}`);
+    logger.info(`Processed MM callback for job ${jobId}: status ${newStatus} type ${type}`);
     return res.status(200).send("Callback processed");
   } catch (err) {
     next(err);

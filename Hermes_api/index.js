@@ -10,6 +10,7 @@ const transactionRoutes = require('./src/routes/transactions');
 const webhookRoutes = require('./src/routes/webhook');
 const monitorRoutes = require('./src/routes/monitor'); 
 const securityRoutes = require('./src/routes/security');
+const p2pRoutes = require('./src/routes/p2p');
 
 const app = express();
 app.use(express.json());  
@@ -41,12 +42,12 @@ function authenticateToken(req, res, next) {
 // Mount public routes
 app.use('/auth', authRoutes);
 app.use('/webhook', webhookRoutes);
-app.use('/rates/current', transactionRoutes);  
 app.use('/monitor', monitorRoutes);  
 
 // Protected routes (use authenticateToken middleware)
 app.use('/user', authenticateToken, userRoutes);
 app.use('/transactions', authenticateToken, transactionRoutes);
+app.use('/p2p', authenticateToken, p2pRoutes);
 // Admin routes
 app.use('/admin/finance', authenticateToken, require('./src/routes/adminFinance'));
 app.use('/security', authenticateToken, securityRoutes);
